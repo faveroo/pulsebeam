@@ -13,6 +13,10 @@ This directory contains the diagrams produced during Stage 2 — Modeling.
 
 The diagrams use Mermaid so they remain reviewable in Git and render directly on GitHub.
 
+## Stage 2 status
+
+The initial modeling baseline is complete. These diagrams are living documentation and should evolve when implementation proves a model assumption wrong or a new requirement requires a structural change.
+
 ## Modeling principles
 
 - Keep automated monitoring separate from Community perception.
