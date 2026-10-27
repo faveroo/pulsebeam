@@ -1,10 +1,10 @@
 # Architecture
 
-> Status: initial draft. Detailed architecture will be defined during Stage 2 — Modeling.
+> Status: Stage 2 baseline accepted. This document defines responsibility boundaries, not a frozen folder structure.
 
 ## Architectural direction
 
-PulseBeam will evolve around a shared Monitoring Engine used by both public Community services and private My PulseBeam endpoints.
+PulseBeam uses one shared Monitoring Engine for both public Community services and private My PulseBeam endpoints.
 
 ```text
                     PulseBeam
@@ -16,44 +16,74 @@ PulseBeam will evolve around a shared Monitoring Engine used by both public Comm
    Community Services         Private Services
 ```
 
-## Initial responsibility boundaries
+## Responsibility boundaries
 
-The project should keep the following concerns distinguishable as it evolves:
+### Domain
 
-- **Domain** — services, checks, status, metrics, incidents, and business rules.
-- **Application** — monitoring use cases, scheduling coordination, metric calculation, and workflows.
-- **Infrastructure** — HTTP client, persistence, clocks/timers, external notification providers.
-- **Interfaces** — CLI initially; API/web interfaces in later milestones.
+Owns concepts and business rules such as:
+- Service
+- ServiceCheck
+- status classification
+- Incident
+- uptime and Health Score concepts
+- Favorite, CommunityReport, and Comment rules
 
-This is a direction rather than a frozen folder structure. The implementation should remain simple until a boundary is justified by actual behavior.
+### Application
+
+Coordinates use cases and workflows such as:
+- registering/managing services;
+- triggering monitoring checks;
+- coordinating scheduling;
+- calculating metrics;
+- evaluating incident state transitions;
+- Community workflows.
+
+### Infrastructure
+
+Provides replaceable technical mechanisms such as:
+- HTTP client;
+- persistence adapter;
+- clock/timers;
+- scheduler/BEAM process integration;
+- notification providers in future milestones.
+
+### Interfaces
+
+Expose application capabilities through:
+- CLI in the initial development phase;
+- HTTP API in a later milestone;
+- Web UI after the API/platform layer exists.
 
 ## Core runtime goals
 
-- Use Gleam as the primary implementation language.
-- Explore BEAM concurrency for independent monitoring processes.
-- Isolate failures between unrelated service checks.
-- Keep automated monitoring data independent from Community reports.
-- Avoid coupling private and Community presentation rules to the monitoring engine.
+- Gleam is the primary implementation language.
+- BEAM concurrency should allow independent monitoring work.
+- Failure in one service check must not terminate unrelated checks.
+- Automated monitoring and Community reports remain independent signals.
+- Public/private presentation and authorization rules must not be embedded in low-level HTTP monitoring logic.
+- Domain classification and metric rules should remain testable without real network calls.
 
-## Planned architecture work
+## Architecture diagram
 
-Stage 2 will define:
+See [Component Architecture](./diagrams/architecture.md).
 
-1. Domain model.
-2. Use-case diagram.
-3. Component/architecture diagram.
-4. Check sequence diagram.
-5. Data model / ER diagram.
-6. Main flows and state transitions.
-7. Initial architecture decisions (ADRs when appropriate).
+## Monitoring interaction
 
-## Decisions not yet frozen
+See [Monitoring Check Sequence](./diagrams/monitoring-sequence.md) and [Main Flows](./diagrams/flows.md).
 
-- Persistence technology.
-- Web framework.
-- Frontend technology.
-- Exact scheduler/process topology.
-- Health Score formula.
-- Notification providers.
+## Accepted architecture decisions
+
+- [ADR-0001 — Use one Service model for Community and Private monitoring](./adr/0001-shared-service-model.md)
+- [ADR-0002 — Keep monitoring checks separate from incidents](./adr/0002-separate-checks-from-incidents.md)
+
+## Decisions intentionally deferred
+
+- persistence technology;
+- web framework;
+- frontend technology;
+- exact scheduler/process supervision topology;
+- exact Health Score formula;
+- incident failure/recovery thresholds;
+- notification providers.
 
 These decisions should be made when the associated requirement becomes relevant rather than prematurely.
