@@ -1,43 +1,45 @@
 # Domain Model
 
-> Status: initial notes. The definitive domain model will be produced during Stage 2 — Modeling.
+> Status: Stage 2 baseline accepted. The model may evolve as implementation reveals new constraints.
 
-## Initial concepts
+## Core concepts
 
 ### Service
 
 Represents a digital service or endpoint monitored by PulseBeam.
 
-Candidate attributes:
+Current conceptual attributes:
 - id
-- owner_id (optional for Community-owned services)
+- owner_id (optional for Community-curated services)
 - name
 - url
 - expected_status
-- interval
+- check_interval
 - enabled
 - visibility
 
+PulseBeam uses one `Service` concept for both Community and Private monitoring. See [ADR-0001](./adr/0001-shared-service-model.md).
+
 ### Service visibility
 
-Initial conceptual values:
+Current values:
 - `Community` — public service curated for the PulseBeam Community catalog.
 - `Private` — endpoint visible only to its owner or authorized users.
 
-An `Unlisted` visibility mode may be evaluated in the future, but is not part of the current v1.0 scope.
+`Unlisted` remains a future possibility and is outside the current scope.
 
-### Check
+### ServiceCheck
 
-Represents one monitoring attempt against a Service.
+Represents one objective monitoring observation against a Service.
 
-Candidate attributes:
+Current conceptual attributes:
 - id
 - service_id
 - status
-- http_status
-- latency
+- http_status (optional)
+- latency_ms (optional)
 - checked_at
-- error
+- error (optional)
 
 ### Service status
 
@@ -45,7 +47,7 @@ Initial model:
 - `UP`
 - `DOWN`
 
-Potential future states such as `DEGRADED` and `UNKNOWN` are intentionally deferred until clear business rules exist.
+Potential states such as `DEGRADED` and `UNKNOWN` remain deferred until business rules justify them.
 
 ### Check error
 
@@ -56,31 +58,31 @@ Candidate domain variants:
 - UnexpectedStatus(Int)
 - InternalMonitoringError
 
-The exact representation will be decided after examining the HTTP libraries and runtime behavior available in Gleam.
+The exact representation will be aligned with the selected Gleam HTTP/runtime libraries during implementation.
 
 ### User
 
-Represents an authenticated PulseBeam user. Users can own private services and later favorite Community services, report failures, and comment.
+Represents an authenticated PulseBeam user. A user can own private services and, in later milestones, favorite Community services, report possible failures, and comment.
 
 ### Favorite
 
-Links a user to a Community service they want to follow.
+Associates a user with a Community service they want to follow.
 
-### Community report
+### CommunityReport
 
-Represents a user's report that a public service may be experiencing problems. Reports do not directly override automated technical status.
+Represents a user's report that a public service may be experiencing problems. Community reports remain independent from automated technical status.
 
 ### Comment
 
-Represents user discussion attached to a Community service.
+Represents Community discussion attached to a public service.
 
 ### Incident
 
-Represents a meaningful availability event detected from monitoring state transitions. The exact rules for opening and resolving incidents remain to be modeled.
+Represents a meaningful period of service unavailability or unhealthy operation. Incidents are intentionally distinct from individual checks. See [ADR-0002](./adr/0002-separate-checks-from-incidents.md).
 
-### Health Score
+### HealthSnapshot
 
-A derived value from 0 to 100 based on objective historical monitoring data. The formula is deliberately not defined yet.
+Represents a historical Health Score observation for a defined period if PulseBeam chooses to persist scores. The exact persistence strategy and formula remain deferred.
 
 ## Important domain separation
 
@@ -88,12 +90,21 @@ A derived value from 0 to 100 based on objective historical monitoring data. The
 Automated monitoring data != Community perception
 ```
 
-A service may be technically classified as `UP` while Community reports indicate a localized or partial problem. PulseBeam must be capable of presenting both without conflating them.
+A service may be technically `UP` while Community reports indicate a localized or partial problem. PulseBeam presents both signals without conflating them.
 
-## Next modeling questions
+## Diagrams
 
-- Is Service one aggregate for Community and Private monitoring, or should ownership/visibility be modeled separately?
-- Should a check store a final status or derive it from response/error data?
-- How should incidents be opened and resolved from consecutive checks?
-- What amount of history is sufficient before uptime or Health Score is considered meaningful?
-- How should the scheduler represent per-service intervals on BEAM?
+- [Domain/class diagram](./diagrams/domain-model.md)
+- [Entity-relationship diagram](./diagrams/erd.md)
+- [Use-case diagram](./diagrams/use-cases.md)
+- [Monitoring sequence](./diagrams/monitoring-sequence.md)
+- [Main flows](./diagrams/flows.md)
+
+## Deferred decisions
+
+The following are intentionally not frozen in Stage 2:
+- exact incident threshold/consecutive-failure policy;
+- minimum history required for Health Score;
+- exact Health Score formula;
+- scheduler/process topology on BEAM;
+- persistence technology and retention policy.
