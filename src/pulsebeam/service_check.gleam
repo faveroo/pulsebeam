@@ -6,8 +6,10 @@ import gleam/time/timestamp
 import pulsebeam/service
 
 pub type ServiceCheckError {
-  HttpError
+  Timeout
+  ConnectionFailed
   InvalidRequest
+  InvalidResponse
 }
 
 pub type ServiceCheckOutcome {
@@ -15,11 +17,17 @@ pub type ServiceCheckOutcome {
   Failure(ServiceCheckError)
 }
 
+pub type CheckStatus {
+  Up
+  Down
+}
+
 pub type ServiceCheck {
   ServiceCheck(
     checked_at: timestamp.Timestamp,
     latency_ms: Option(Int),
     outcome: ServiceCheckOutcome,
+    status: CheckStatus,
   )
 }
 
@@ -33,6 +41,7 @@ pub fn check(service: service.Service) -> ServiceCheck {
         checked_at: checked_at,
         latency_ms: None,
         outcome: Failure(InvalidRequest),
+        status: Down,
       )
 
     Ok(req) -> {
@@ -41,11 +50,12 @@ pub fn check(service: service.Service) -> ServiceCheck {
       let finished_at = timestamp.system_time()
 
       case response {
-        Error(_) ->
+        Error(error) ->
           ServiceCheck(
             checked_at: checked_at,
             latency_ms: None,
-            outcome: Failure(HttpError),
+            outcome: Failure(map_http_error(error)),
+            status: Down,
           )
 
         Ok(response) -> {
@@ -54,10 +64,18 @@ pub fn check(service: service.Service) -> ServiceCheck {
             |> duration.to_milliseconds
             |> Some
 
+          let status = case
+            response.status == service.expected_status(service)
+          {
+            True -> Up
+            False -> Down
+          }
+
           ServiceCheck(
             checked_at: checked_at,
             latency_ms: latency,
             outcome: HttpResponse(response.status),
+            status: status,
           )
         }
       }
@@ -69,10 +87,22 @@ pub fn checked_at(service_check: ServiceCheck) -> timestamp.Timestamp {
   service_check.checked_at
 }
 
+pub fn status(service_check: ServiceCheck) -> CheckStatus {
+  service_check.status
+}
+
 pub fn latency_ms(service_check: ServiceCheck) -> Option(Int) {
   service_check.latency_ms
 }
 
 pub fn outcome(service_check: ServiceCheck) -> ServiceCheckOutcome {
   service_check.outcome
+}
+
+fn map_http_error(error: httpc.HttpError) -> ServiceCheckError {
+  case error {
+    httpc.ResponseTimeout -> Timeout
+    httpc.FailedToConnect(_, _) -> ConnectionFailed
+    httpc.InvalidUtf8Response -> InvalidResponse
+  }
 }

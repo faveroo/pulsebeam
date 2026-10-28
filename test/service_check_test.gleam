@@ -43,7 +43,7 @@ pub fn failed_connection_creates_check_test() {
   let check = service_check.check(monitored_service)
 
   assert service_check.outcome(check)
-    == service_check.Failure(service_check.HttpError)
+    == service_check.Failure(service_check.ConnectionFailed)
 }
 
 pub fn failed_connection_has_no_latency_test() {
@@ -66,4 +66,20 @@ pub fn failed_connection_still_records_timestamp_test() {
     |> timestamp.to_unix_seconds_and_nanoseconds
 
   assert seconds > 0
+}
+
+pub fn unexpected_status_is_down_test() {
+  let assert Ok(monitored_service) =
+    service.new(
+      "Example",
+      "https://example.com",
+      404,
+      60,
+      service.Community,
+    )
+
+  let check = service_check.check(monitored_service)
+
+  assert service_check.status(check) == service_check.Down
+  assert service_check.outcome(check) == service_check.HttpResponse(200)
 }
