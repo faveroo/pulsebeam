@@ -3,7 +3,7 @@ import gleam/httpc
 import gleam/option.{type Option, None, Some}
 import gleam/time/duration
 import gleam/time/timestamp
-import pulsebeam/service
+import pulsebeam/service.{type ServiceId}
 
 pub type ServiceCheckError {
   Timeout
@@ -24,6 +24,7 @@ pub type CheckStatus {
 
 pub type ServiceCheck {
   ServiceCheck(
+    service_id: ServiceId,
     checked_at: timestamp.Timestamp,
     latency_ms: Option(Int),
     outcome: ServiceCheckOutcome,
@@ -38,6 +39,7 @@ pub fn check(service: service.Service) -> ServiceCheck {
   case request.to(url) {
     Error(_) ->
       ServiceCheck(
+        service_id: service.id(service),
         checked_at: checked_at,
         latency_ms: None,
         outcome: Failure(InvalidRequest),
@@ -52,6 +54,7 @@ pub fn check(service: service.Service) -> ServiceCheck {
       case response {
         Error(error) ->
           ServiceCheck(
+            service_id: service.id(service),
             checked_at: checked_at,
             latency_ms: None,
             outcome: Failure(map_http_error(error)),
@@ -72,6 +75,7 @@ pub fn check(service: service.Service) -> ServiceCheck {
           }
 
           ServiceCheck(
+            service_id: service.id(service),
             checked_at: checked_at,
             latency_ms: latency,
             outcome: HttpResponse(response.status),
@@ -97,6 +101,10 @@ pub fn latency_ms(service_check: ServiceCheck) -> Option(Int) {
 
 pub fn outcome(service_check: ServiceCheck) -> ServiceCheckOutcome {
   service_check.outcome
+}
+
+pub fn service_id(service_check: ServiceCheck) -> ServiceId {
+  service_check.service_id
 }
 
 fn map_http_error(error: httpc.HttpError) -> ServiceCheckError {

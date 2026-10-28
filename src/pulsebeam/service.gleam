@@ -1,4 +1,5 @@
 import gleam/string
+import youid/uuid
 
 pub type Visibility {
   Community
@@ -14,6 +15,7 @@ pub type ServiceError {
 
 pub opaque type Service {
   Service(
+    id: ServiceId,
     name: String,
     url: String,
     expected_status: Int,
@@ -21,6 +23,10 @@ pub opaque type Service {
     enabled: Bool,
     visibility: Visibility,
   )
+}
+
+pub opaque type ServiceId {
+  ServiceId(String)
 }
 
 pub fn new(
@@ -34,6 +40,7 @@ pub fn new(
   let url = string.trim(url)
   let valid_url =
     string.starts_with(url, "http://") || string.starts_with(url, "https://")
+  let id = generate_id()
 
   case
     name == "",
@@ -46,8 +53,20 @@ pub fn new(
     _, _, True, _ -> Error(InvalidExpectedStatus)
     _, _, _, True -> Error(InvalidUrl)
     False, False, False, False ->
-      Ok(Service(name, url, expected_status, interval_seconds, True, visibility))
+      Ok(Service(
+        id,
+        name,
+        url,
+        expected_status,
+        interval_seconds,
+        True,
+        visibility,
+      ))
   }
+}
+
+pub fn id(service: Service) -> ServiceId {
+  service.id
 }
 
 pub fn name(service: Service) -> String {
@@ -86,4 +105,10 @@ pub fn enable(service: Service) -> Service {
     True -> service
     False -> Service(..service, enabled: True)
   }
+}
+
+fn generate_id() -> ServiceId {
+  uuid.v7()
+  |> uuid.to_string
+  |> ServiceId
 }

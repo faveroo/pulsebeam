@@ -14,6 +14,16 @@ pub fn create_valid_service_test() {
   assert service.visibility(created_service) == service.Community
 }
 
+pub fn new_services_receive_different_ids_test() {
+  let assert Ok(first_service) =
+    service.new("GitHub", "https://github.com", 200, 60, service.Community)
+
+  let assert Ok(second_service) =
+    service.new("Example", "https://example.com", 200, 60, service.Community)
+
+  assert service.id(first_service) != service.id(second_service)
+}
+
 pub fn reject_empty_name_test() {
   let result = service.new("", "https://github.com", 200, 60, service.Community)
 
