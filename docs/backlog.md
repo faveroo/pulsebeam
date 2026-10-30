@@ -195,19 +195,35 @@ Related: RF41, RF42, RF45.
 
 # Delivery roadmap
 
-## v0.1 — Monitoring Core
-- US01 Register service
-- US02 Execute HTTP check
-- US03 Measure latency
-- US04 Classify status
-- US08 Store check history
-- US09 Query history
-- US10 Calculate uptime
+## Stage 3 / v0.1 — Monitoring Core — COMPLETED
 
-## v0.2 — Scheduler & BEAM
-- US05 Disable monitoring
-- US06 Monitor multiple services
-- US07 Schedule automatic checks
+Completed on 2026-10-30 with 66 passing tests.
+
+- [x] US01 Register service
+- [x] US02 Execute HTTP check
+- [x] US03 Measure latency
+- [x] US04 Classify status
+- [x] US08 Store check history
+- [x] US09 Query history
+- [x] US10 Calculate uptime
+
+Implementation review and carried technical debt are documented in [Stage 3 Review](./stage-3-review.md).
+
+## Stage 4 / v0.2 — Persistent Monitoring
+
+Goal: turn the Stage 3 in-memory monitoring core into a durable BEAM runtime.
+
+Planned scope:
+- choose and document the persistence approach;
+- introduce persistence/repository boundaries;
+- persist and restore Services with stable `ServiceId` values;
+- persist `ServiceCheck` history;
+- restore monitoring state after restart;
+- US05 enforce disabled services at runtime;
+- US06 monitor multiple services independently;
+- US07 schedule checks automatically according to `interval_seconds`;
+- use monotonic timing for latency;
+- add integration tests for persistence, scheduling, concurrency, and restart recovery.
 
 ## v0.3 — Metrics
 - US11 Calculate average latency
