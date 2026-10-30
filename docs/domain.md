@@ -1,6 +1,6 @@
 # Domain Model
 
-> Status: Stage 2 baseline accepted. The model may evolve as implementation reveals new constraints.
+> Status: Stage 3 implementation baseline completed. The model may evolve as persistence and runtime concerns are introduced.
 
 ## Core concepts
 
@@ -8,23 +8,26 @@
 
 Represents a digital service or endpoint monitored by PulseBeam.
 
-Current conceptual attributes:
-- id
-- owner_id (optional for Community-curated services)
-- name
-- url
-- expected_status
-- check_interval
-- enabled
-- visibility
+Current implemented attributes:
+- `id: ServiceId`
+- `name`
+- `url`
+- `expected_status`
+- `interval_seconds`
+- `enabled`
+- `visibility`
+
+`ServiceId` is an opaque UUID v7-backed identifier generated when a new Service is created.
 
 PulseBeam uses one `Service` concept for both Community and Private monitoring. See [ADR-0001](./adr/0001-shared-service-model.md).
+
+`owner_id` remains a future attribute for authenticated/private-service ownership and is not yet implemented.
 
 ### Service visibility
 
 Current values:
 - `Community` — public service curated for the PulseBeam Community catalog.
-- `Private` — endpoint visible only to its owner or authorized users.
+- `Private` — endpoint intended to be visible only to its owner or authorized users once authentication/authorization is implemented.
 
 `Unlisted` remains a future possibility and is outside the current scope.
 
@@ -32,33 +35,72 @@ Current values:
 
 Represents one objective monitoring observation against a Service.
 
-Current conceptual attributes:
-- id
-- service_id
-- status
-- http_status (optional)
-- latency_ms (optional)
-- checked_at
-- error (optional)
+Current implemented attributes:
+- `service_id`
+- `checked_at`
+- `latency_ms` (optional)
+- `outcome`
+- `status`
+
+`ServiceCheck` currently has no independent check identifier. A persisted check ID may be introduced in Stage 4 if required by the selected storage model.
+
+### ServiceCheck outcome
+
+Current variants:
+- `HttpResponse(Int)` — an HTTP response was received and its status code is preserved.
+- `Failure(ServiceCheckError)` — the check failed before a usable HTTP response was available.
+
+Keeping outcome separate from final health status allows PulseBeam to represent, for example, `Down` together with `HttpResponse(500)` rather than losing the actual response.
 
 ### Service status
 
-Initial model:
-- `UP`
-- `DOWN`
+Current implemented values:
+- `Up`
+- `Down`
 
-Potential states such as `DEGRADED` and `UNKNOWN` remain deferred until business rules justify them.
+Potential states such as `Degraded` and `Unknown` remain deferred until business rules justify them.
 
 ### Check error
 
-Candidate domain variants:
-- Timeout
-- DnsError
-- ConnectionError
-- UnexpectedStatus(Int)
-- InternalMonitoringError
+Current implemented variants:
+- `Timeout`
+- `ConnectionFailed`
+- `InvalidRequest`
+- `InvalidResponse`
 
-The exact representation will be aligned with the selected Gleam HTTP/runtime libraries during implementation.
+Unexpected valid HTTP statuses are not transport errors. They remain `HttpResponse(status)` outcomes and can produce `Down` when the received status differs from the Service's configured expected status.
+
+### CheckHistory
+
+Represents the Stage 3 in-memory collection of ServiceChecks.
+
+Current behavior:
+- immutable storage;
+- newest check first;
+- latest-check lookup;
+- filtering by `ServiceId`;
+- inclusive filtering between two timestamps.
+
+This is intentionally an in-memory implementation. Stage 4 introduces a durable repository/persistence boundary.
+
+### Uptime
+
+Current variants:
+- `Available(Float)`
+- `NotAvailable`
+
+Uptime is calculated as:
+
+```text
+UP checks / total considered checks * 100
+```
+
+Supported periods:
+- last 24 hours;
+- last 7 days;
+- last 30 days.
+
+A period returns `NotAvailable` when history does not reach the beginning of the requested window, preventing PulseBeam from presenting an assumed 100% based only on a short failure-free history.
 
 ### User
 
@@ -90,7 +132,16 @@ Represents a historical Health Score observation for a defined period if PulseBe
 Automated monitoring data != Community perception
 ```
 
-A service may be technically `UP` while Community reports indicate a localized or partial problem. PulseBeam presents both signals without conflating them.
+A service may be technically `Up` while Community reports indicate a localized or partial problem. PulseBeam presents both signals without conflating them.
+
+## Stage 4 domain considerations
+
+Persistence introduces several requirements that should not weaken the domain model:
+- persisted Services must retain their existing `ServiceId` after restart;
+- loading a Service must not generate a new UUID;
+- storage-specific IDs and serialization details should remain outside business rules where practical;
+- metrics must be calculated from checks already scoped to the intended service;
+- check history persistence must preserve timestamp, final status, outcome, latency, and service reference.
 
 ## Diagrams
 
@@ -102,9 +153,11 @@ A service may be technically `UP` while Community reports indicate a localized o
 
 ## Deferred decisions
 
-The following are intentionally not frozen in Stage 2:
+The following remain intentionally open:
+- persisted `ServiceCheck` identifier strategy;
 - exact incident threshold/consecutive-failure policy;
 - minimum history required for Health Score;
 - exact Health Score formula;
 - scheduler/process topology on BEAM;
-- persistence technology and retention policy.
+- persistence technology and retention policy until the Stage 4 ADR;
+- authentication/authorization model for private-service history.
