@@ -13,6 +13,10 @@ pub type ServiceError {
   InvalidIntervalSeconds
 }
 
+pub type ServiceIdError {
+  InvalidServiceId
+}
+
 pub opaque type Service {
   Service(
     id: ServiceId,
@@ -38,8 +42,8 @@ pub fn new(
 ) -> Result(Service, ServiceError) {
   let name = string.trim(name)
   let url = string.trim(url)
-  let valid_url =
-    string.starts_with(url, "http://") || string.starts_with(url, "https://")
+  let valid_url = valid_url(url)
+
   let id = generate_id()
 
   case
@@ -63,6 +67,46 @@ pub fn new(
         visibility,
       ))
   }
+}
+
+pub fn reconstitute(
+  id: ServiceId,
+  name: String,
+  url: String,
+  expected_status: Int,
+  interval_seconds: Int,
+  enabled: Bool,
+  visibility: Visibility,
+) -> Result(Service, ServiceError) {
+  let name = string.trim(name)
+  let url = string.trim(url)
+  let valid_url = valid_url(url)
+
+  case
+    name == "",
+    interval_seconds <= 0,
+    expected_status < 100 || expected_status > 599,
+    !valid_url
+  {
+    True, _, _, _ -> Error(InvalidName)
+    _, True, _, _ -> Error(InvalidIntervalSeconds)
+    _, _, True, _ -> Error(InvalidExpectedStatus)
+    _, _, _, True -> Error(InvalidUrl)
+    False, False, False, False ->
+      Ok(Service(
+        id: id,
+        name: name,
+        url: url,
+        expected_status: expected_status,
+        interval_seconds: interval_seconds,
+        enabled: enabled,
+        visibility: visibility,
+      ))
+  }
+}
+
+fn valid_url(url: String) -> Bool {
+  string.starts_with(url, "http://") || string.starts_with(url, "https://")
 }
 
 pub fn id(service: Service) -> ServiceId {
@@ -105,6 +149,21 @@ pub fn enable(service: Service) -> Service {
     True -> service
     False -> Service(..service, enabled: True)
   }
+}
+
+pub fn service_id_from_string(
+  value: String,
+) -> Result(ServiceId, ServiceIdError) {
+  case uuid.from_string(value) {
+    Ok(id) -> id |> uuid.to_string |> ServiceId |> Ok
+
+    Error(_) -> Error(InvalidServiceId)
+  }
+}
+
+pub fn service_id_to_string(id: ServiceId) -> String {
+  let ServiceId(value) = id
+  value
 }
 
 fn generate_id() -> ServiceId {

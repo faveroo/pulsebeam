@@ -14,7 +14,7 @@ pub fn create_valid_service_test() {
   assert service.visibility(created_service) == service.Community
 }
 
-pub fn new_services_receive_different_ids_test() {
+pub fn new_services_receive_different_ids_1_test() {
   let assert Ok(first_service) =
     service.new("GitHub", "https://github.com", 200, 60, service.Community)
 
@@ -153,4 +153,118 @@ pub fn enabling_enabled_service_keeps_it_enabled_test() {
   let enabled_service = service.enable(created_service)
 
   assert service.is_enabled(enabled_service) == True
+}
+
+pub fn service_id_round_trip_test() {
+  let assert Ok(monitored_service) =
+    service.new("Example", "https://example.com", 200, 60, service.Community)
+
+  let original_id =
+    monitored_service
+    |> service.id
+    |> service.service_id_to_string
+
+  let assert Ok(reconstructed_id) = service.service_id_from_string(original_id)
+
+  let reconstructed_string = service.service_id_to_string(reconstructed_id)
+
+  assert reconstructed_string == original_id
+}
+
+pub fn invalid_service_id_is_rejected_test() {
+  let result = service.service_id_from_string("this-is-not-a-valid-uuid")
+
+  assert result == Error(service.InvalidServiceId)
+}
+
+pub fn new_services_receive_different_ids_2_test() {
+  let assert Ok(first) =
+    service.new(
+      "First",
+      "https://first.example.com",
+      200,
+      60,
+      service.Community,
+    )
+
+  let assert Ok(second) =
+    service.new(
+      "Second",
+      "https://second.example.com",
+      200,
+      60,
+      service.Community,
+    )
+
+  let first_id =
+    first
+    |> service.id
+    |> service.service_id_to_string
+
+  let second_id =
+    second
+    |> service.id
+    |> service.service_id_to_string
+
+  assert first_id != second_id
+}
+
+pub fn generated_service_id_can_be_parsed_test() {
+  let assert Ok(monitored_service) =
+    service.new("Example", "https://example.com", 200, 60, service.Community)
+
+  let id =
+    monitored_service
+    |> service.id
+    |> service.service_id_to_string
+
+  let result = service.service_id_from_string(id)
+
+  assert result != Error(service.InvalidServiceId)
+}
+
+pub fn reconstituted_service_preserves_id_test() {
+  let original_id_string =
+    "019d44b8-e757-765a-a61c-9794161092d1"
+
+  let assert Ok(existing_id) =
+    service.service_id_from_string(original_id_string)
+
+  let assert Ok(monitored_service) =
+    service.reconstitute(
+      existing_id,
+      "Example",
+      "https://example.com",
+      200,
+      60,
+      True,
+      service.Community,
+    )
+
+  let reconstructed_id =
+    monitored_service
+    |> service.id
+    |> service.service_id_to_string
+
+  assert reconstructed_id == original_id_string
+}
+
+pub fn reconstituted_service_preserves_disabled_state_test() {
+  let assert Ok(existing_id) =
+    service.service_id_from_string(
+      "019d44b8-e757-765a-a61c-9794161092d1",
+    )
+
+  let assert Ok(monitored_service) =
+    service.reconstitute(
+      existing_id,
+      "Example",
+      "https://example.com",
+      200,
+      60,
+      False,
+      service.Community,
+    )
+
+  assert service.is_enabled(monitored_service) == False
 }
