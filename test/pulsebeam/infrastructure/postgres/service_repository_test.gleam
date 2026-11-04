@@ -53,7 +53,7 @@ pub fn duplicate_service_id_returns_conflict_test() {
 
   process.sleep(500)
 
-  let assert Ok(monitored_service) =
+  let assert Ok(original) =
     service.new(
       "Duplicate Test",
       "https://example.com",
@@ -62,12 +62,20 @@ pub fn duplicate_service_id_returns_conflict_test() {
       service.Private,
     )
 
-  let first = service_repository.insert(database, monitored_service)
+  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
+    pog.transaction(database, fn(transaction) {
+      let assert Ok(Nil) = service_repository.insert(transaction, original)
 
-  let second = service_repository.insert(database, monitored_service)
+      let second = service_repository.insert(transaction, original)
 
-  assert first == Ok(Nil)
-  assert second == Error(persistence_error.Conflict)
+      assert second == Error(persistence_error.Conflict)
+
+      Error("rollback-for-test")
+    })
+
+  // Confirma que a primeira inserção também foi revertida.
+  let assert Ok(None) =
+    service_repository.find_by_id(database, service.id(original))
 }
 
 pub fn service_round_trip_test() {
