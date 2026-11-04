@@ -1,21 +1,17 @@
-import envoy
-import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import pog
-import pulsebeam/infrastructure/postgres/connection
 import pulsebeam/infrastructure/postgres/service_repository
 import pulsebeam/repository/persistence_error
 import pulsebeam/service
+import support/postgres as test_postgres
+
+// -----------------------------------------------------------------------------
+// Insert
+// -----------------------------------------------------------------------------
 
 pub fn insert_service_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_insert_rollback_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(original) =
     service.new(
@@ -35,23 +31,19 @@ pub fn insert_service_test() {
 
       assert service.id(loaded) == service.id(original)
 
-      // Rollback intencional para não persistir dados do teste.
       Error("rollback-for-test")
     })
 
-  // Confirma que o registro não permaneceu no banco.
   let assert Ok(None) =
     service_repository.find_by_id(database, service.id(original))
 }
 
+// -----------------------------------------------------------------------------
+// Duplicate ID
+// -----------------------------------------------------------------------------
+
 pub fn duplicate_service_id_returns_conflict_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_duplicate_service_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(original) =
     service.new(
@@ -73,19 +65,16 @@ pub fn duplicate_service_id_returns_conflict_test() {
       Error("rollback-for-test")
     })
 
-  // Confirma que a primeira inserção também foi revertida.
   let assert Ok(None) =
     service_repository.find_by_id(database, service.id(original))
 }
 
+// -----------------------------------------------------------------------------
+// Round-trip
+// -----------------------------------------------------------------------------
+
 pub fn service_round_trip_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_service_round_trip_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(original) =
     service.new(
@@ -106,11 +95,15 @@ pub fn service_round_trip_test() {
       assert service.id(loaded) == service.id(original)
       assert service.name(loaded) == service.name(original)
       assert service.url(loaded) == service.url(original)
+
       assert service.expected_status(loaded)
         == service.expected_status(original)
+
       assert service.interval_seconds(loaded)
         == service.interval_seconds(original)
+
       assert service.is_enabled(loaded) == service.is_enabled(original)
+
       assert service.visibility(loaded) == service.visibility(original)
 
       Error("rollback-for-test")
@@ -120,14 +113,12 @@ pub fn service_round_trip_test() {
     service_repository.find_by_id(database, service.id(original))
 }
 
+// -----------------------------------------------------------------------------
+// Enabled state
+// -----------------------------------------------------------------------------
+
 pub fn disabled_state_is_persisted_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_disabled_state_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(original) =
     service.new(
@@ -155,19 +146,16 @@ pub fn disabled_state_is_persisted_test() {
       Error("rollback-for-test")
     })
 
-  // Verifica que a transação foi revertida.
   let assert Ok(None) =
     service_repository.find_by_id(database, service.id(original))
 }
 
+// -----------------------------------------------------------------------------
+// List
+// -----------------------------------------------------------------------------
+
 pub fn list_services_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_list_services_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(original) =
     service.new(
@@ -196,14 +184,12 @@ pub fn list_services_test() {
     service_repository.find_by_id(database, service.id(original))
 }
 
+// -----------------------------------------------------------------------------
+// Update nonexistent service
+// -----------------------------------------------------------------------------
+
 pub fn update_nonexistent_service_returns_not_found_test() {
-  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
-
-  let pool_name = process.new_name("pulsebeam_update_not_found_test")
-
-  let assert Ok(database) = connection.start(pool_name, database_url)
-
-  process.sleep(500)
+  let database = test_postgres.database()
 
   let assert Ok(monitored_service) =
     service.new(
@@ -214,7 +200,6 @@ pub fn update_nonexistent_service_returns_not_found_test() {
       service.Private,
     )
 
-  // Não inserimos esse serviço no banco.
   let result = service_repository.update(database, monitored_service)
 
   assert result == Error(persistence_error.NotFound)
