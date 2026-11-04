@@ -1,7 +1,5 @@
 import gleam/option.{type Option}
-import pulsebeam/repository/persistence_error.{
-  type PersistenceError
-}
+import pulsebeam/repository/persistence_error.{type PersistenceError}
 import pulsebeam/service.{type Service, type ServiceId}
 
 pub type ServiceRepostiory {
@@ -12,5 +10,3 @@ pub type ServiceRepostiory {
     list: fn() -> Result(List(Service), PersistenceError),
   )
 }
-
-

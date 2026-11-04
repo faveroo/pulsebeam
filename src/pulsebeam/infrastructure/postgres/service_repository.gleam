@@ -1,4 +1,5 @@
 import gleam/dynamic/decode
+import gleam/list as gleam_list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import pog
@@ -121,11 +122,12 @@ fn row_to_service(
     visibility,
   ) = row
 
-  let assert Ok(service_id) =
+  use service_id <- result.try(
     service.service_id_from_string(id)
-    |> result.map_error(fn(_) { InvalidPersistedData })
+    |> result.map_error(fn(_) { InvalidPersistedData }),
+  )
 
-  let assert Ok(service_visibility) = visibility_from_string(visibility)
+  use service_visibility <- result.try(visibility_from_string(visibility))
 
   service.reconstitute(
     service_id,
@@ -214,21 +216,45 @@ pub fn update(
     |> pog.parameter(pog.int(service.interval_seconds(monitored_service)))
     |> pog.parameter(pog.bool(service.is_enabled(monitored_service)))
     |> pog.parameter(
-      pog.text(
-        visibility_to_string(
-          service.visibility(monitored_service),
-        ),
-      ),
+      pog.text(visibility_to_string(service.visibility(monitored_service))),
     )
 
   case pog.execute(query, connection) {
-    Ok(_) ->
-      Ok(Nil)
+    Ok(_) -> Ok(Nil)
 
-    Error(pog.ConnectionUnavailable) ->
-      Error(ConnectionFailed)
+    Error(pog.ConnectionUnavailable) -> Error(ConnectionFailed)
 
-    Error(_) ->
-      Error(QueryFailed)
+    Error(_) -> Error(QueryFailed)
+  }
+}
+
+pub fn list(
+  connection: pog.Connection,
+) -> Result(List(service.Service), PersistenceError) {
+  let query =
+    pog.query(
+      "
+        SELECT
+          id::text,
+          name,
+          url,
+          expected_status,
+          interval_seconds,
+          enabled,
+          visibility
+        FROM services
+        ORDER BY name ASC, id ASC
+      ",
+    )
+    |> pog.returning(service_row_decoder())
+
+  case pog.execute(query, connection) {
+    Ok(pog.Returned(rows: rows, ..)) -> gleam_list.try_map(rows, row_to_service)
+
+    Error(pog.ConnectionUnavailable) -> Error(ConnectionFailed)
+
+    Error(pog.UnexpectedResultType(_)) -> Error(InvalidPersistedData)
+
+    Error(_) -> Error(QueryFailed)
   }
 }
