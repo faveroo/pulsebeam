@@ -195,3 +195,27 @@ pub fn list_services_test() {
   let assert Ok(None) =
     service_repository.find_by_id(database, service.id(original))
 }
+
+pub fn update_nonexistent_service_returns_not_found_test() {
+  let assert Ok(database_url) = envoy.get("PULSEBEAM_DATABASE_URL")
+
+  let pool_name = process.new_name("pulsebeam_update_not_found_test")
+
+  let assert Ok(database) = connection.start(pool_name, database_url)
+
+  process.sleep(500)
+
+  let assert Ok(monitored_service) =
+    service.new(
+      "Nonexistent Service",
+      "https://nonexistent.example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  // Não inserimos esse serviço no banco.
+  let result = service_repository.update(database, monitored_service)
+
+  assert result == Error(persistence_error.NotFound)
+}

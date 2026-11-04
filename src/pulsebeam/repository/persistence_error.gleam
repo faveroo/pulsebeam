@@ -3,4 +3,5 @@ pub type PersistenceError {
   QueryFailed
   Conflict
   InvalidPersistedData
+  NotFound
 }

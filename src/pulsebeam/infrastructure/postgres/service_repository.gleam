@@ -5,7 +5,7 @@ import gleam/result
 import pog
 import pulsebeam/repository/persistence_error.{
   type PersistenceError, Conflict, ConnectionFailed, InvalidPersistedData,
-  QueryFailed,
+  NotFound, QueryFailed,
 }
 import pulsebeam/service
 
@@ -220,6 +220,8 @@ pub fn update(
     )
 
   case pog.execute(query, connection) {
+    Ok(pog.Returned(count: 0, ..)) -> Error(NotFound)
+
     Ok(_) -> Ok(Nil)
 
     Error(pog.ConnectionUnavailable) -> Error(ConnectionFailed)
