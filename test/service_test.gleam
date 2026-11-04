@@ -224,8 +224,7 @@ pub fn generated_service_id_can_be_parsed_test() {
 }
 
 pub fn reconstituted_service_preserves_id_test() {
-  let original_id_string =
-    "019d44b8-e757-765a-a61c-9794161092d1"
+  let original_id_string = "019d44b8-e757-765a-a61c-9794161092d1"
 
   let assert Ok(existing_id) =
     service.service_id_from_string(original_id_string)
@@ -251,9 +250,7 @@ pub fn reconstituted_service_preserves_id_test() {
 
 pub fn reconstituted_service_preserves_disabled_state_test() {
   let assert Ok(existing_id) =
-    service.service_id_from_string(
-      "019d44b8-e757-765a-a61c-9794161092d1",
-    )
+    service.service_id_from_string("019d44b8-e757-765a-a61c-9794161092d1")
 
   let assert Ok(monitored_service) =
     service.reconstitute(

@@ -12,7 +12,16 @@ The project is being developed incrementally with a software engineering-first a
 
 ## Current status
 
-The project is currently in the engineering and modeling phase. No production implementation has been added yet.
+PulseBeam is currently in **Stage 4 — Persistent Monitoring**.
+
+The Monitoring Core (v0.1) is complete, including service registration, HTTP checks, latency measurement, check history, and uptime calculation.
+
+Stage 4 introduces PostgreSQL persistence, repository contracts, and the infrastructure required for continuous monitoring.
+
+## Development
+
+See [Local Development](docs/development.md) for PostgreSQL setup, database migrations, and integration tests.
+
 
 ## Documentation
 
