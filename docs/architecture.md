@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Stage 3 Monitoring Core completed. Stage 4 persistence direction accepted through ADR-0003. This document defines responsibility boundaries, not a frozen folder structure.
+> Status: Stage 3 Monitoring Core completed. Stage 4 PostgreSQL persistence for Services and ServiceChecks implemented through Issues #16 and #17; runtime scheduling and supervision are still pending. This document defines responsibility boundaries, not a frozen folder structure.
 
 ## Architectural direction
 
@@ -146,9 +146,9 @@ See [Monitoring Check Sequence](./diagrams/monitoring-sequence.md) and [Main Flo
 
 - HTTP transport and timing are currently invoked directly from `service_check.gleam`;
 - latency measurement currently uses system/wall-clock timestamps rather than a monotonic timer;
-- `CheckHistory` is in-memory only and is not durable storage;
-- `ServiceId` needs a controlled persistence/reconstitution path;
-- no PostgreSQL adapter or migrations are implemented yet;
+- The original `CheckHistory` implementation remains in-memory; durable history is provided separately through `ServiceCheckRepository`;
+- Service and ServiceCheck adapters exist, but application-level repository composition and supervised pool lifecycle are not yet implemented;
+- integration tests currently create per-test PostgreSQL pools without explicit teardown (see [Persistence Architecture](./persistence.md#technical-debt-and-follow-up));
 - no scheduler, supervision topology, or restart recovery is implemented yet;
 - private-history authorization remains outside the current core.
 
@@ -156,7 +156,7 @@ See [Stage 3 Review](./stage-3-review.md) for the full Stage 3 review and [Persi
 
 ## Decisions intentionally deferred
 
-- exact SQL schema details and migration tooling until the concrete PostgreSQL adapter is implemented;
+- automated migration tooling (the concrete SQL schemas and manual migrations now exist);
 - ServiceCheck retention/cleanup policy until storage growth and product requirements justify a policy;
 - web framework;
 - frontend technology;
