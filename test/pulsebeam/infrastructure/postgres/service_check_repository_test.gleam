@@ -263,3 +263,80 @@ pub fn between_returns_checks_within_period_test() {
       Error("rollback-for-test")
     })
 }
+
+pub fn history_is_isolated_by_service_test() {
+  let database = test_postgres.database()
+
+  let assert Ok(first_service) =
+    service.new(
+      "First Service",
+      "https://first.example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let assert Ok(second_service) =
+    service.new(
+      "Second Service",
+      "https://second.example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+
+  let first_check =
+    service_check.ServiceCheck(
+      service_id: service.id(first_service),
+      checked_at: checked_at,
+      latency_ms: Some(42),
+      outcome: service_check.HttpResponse(200),
+      status: service_check.Up,
+    )
+
+  let second_check =
+    service_check.ServiceCheck(
+      service_id: service.id(second_service),
+      checked_at: checked_at,
+      latency_ms: None,
+      outcome: service_check.Failure(service_check.Timeout),
+      status: service_check.Down,
+    )
+
+  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
+    pog.transaction(database, fn(transaction) {
+      let assert Ok(Nil) = service_repository.insert(transaction, first_service)
+
+      let assert Ok(Nil) =
+        service_repository.insert(transaction, second_service)
+
+      let assert Ok(Nil) =
+        service_check_repository.store(transaction, first_check)
+
+      let assert Ok(Nil) =
+        service_check_repository.store(transaction, second_check)
+
+      let assert Ok([first_result]) =
+        service_check_repository.for_service(
+          transaction,
+          service.id(first_service),
+        )
+
+      let assert Ok([second_result]) =
+        service_check_repository.for_service(
+          transaction,
+          service.id(second_service),
+        )
+
+      assert first_result.outcome == service_check.HttpResponse(200)
+      assert second_result.outcome
+        == service_check.Failure(service_check.Timeout)
+
+      assert first_result.service_id == service.id(first_service)
+      assert second_result.service_id == service.id(second_service)
+
+      Error("rollback-for-test")
+    })
+}

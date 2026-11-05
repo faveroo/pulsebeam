@@ -25,7 +25,13 @@ pub fn database() -> pog.Connection {
 
   let pool_name = process.new_name("pulsebeam_repository_test")
 
-  let assert Ok(database) = connection.start(pool_name, database_url)
+  let assert Ok(config) = pog.url_config(pool_name, database_url)
+
+  let config = pog.pool_size(config, 1)
+
+  let assert Ok(started) = pog.start(config)
+
+  let database = started.data
 
   let assert Ok(Nil) = wait_until_ready(database, 10)
 
