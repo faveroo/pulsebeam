@@ -9,438 +9,344 @@ import pulsebeam/service_check
 import support/postgres as test_postgres
 
 // -----------------------------------------------------------------------------
-// Store HTTP response
+// Helpers
 // -----------------------------------------------------------------------------
 
-pub fn store_http_response_test() {
+fn with_rollback(run: fn(pog.Connection) -> Nil) -> Nil {
   let database = test_postgres.database()
-
-  let assert Ok(monitored_service) =
-    service.new(
-      "HTTP Response Test",
-      "https://example.com",
-      200,
-      60,
-      service.Private,
-    )
-
-  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
-
-  let check =
-    service_check.ServiceCheck(
-      service_id: service.id(monitored_service),
-      checked_at: checked_at,
-      latency_ms: Some(42),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
 
   let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
     pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, check)
-
-      let query =
-        pog.query(
-          "
-          SELECT
-            status = 'up'
-            AND http_status = 200
-            AND latency_ms = 42
-            AND error_reason IS NULL
-            AND checked_at = $2::timestamptz
-          FROM service_checks
-          WHERE service_id = $1::uuid
-          LIMIT 1
-          ",
-        )
-        |> pog.parameter(
-          service.id(monitored_service)
-          |> service.service_id_to_string
-          |> pog.text,
-        )
-        |> pog.parameter(pog.timestamp(checked_at))
-        |> pog.returning(decode.at([0], decode.bool))
-
-      let assert Ok(pog.Returned(rows: [matches], ..)) =
-        pog.execute(query, transaction)
-
-      assert matches == True
-
+      run(transaction)
       Error("rollback-for-test")
     })
 
-  let assert Ok(None) =
-    service_repository.find_by_id(database, service.id(monitored_service))
+  Nil
 }
 
-// -----------------------------------------------------------------------------
-// Store timeout failure
-// -----------------------------------------------------------------------------
-
-pub fn store_timeout_failure_test() {
-  let database = test_postgres.database()
-
+fn insert_service(database: pog.Connection, name: String) -> service.Service {
   let assert Ok(monitored_service) =
-    service.new("Timeout Test", "https://example.com", 200, 60, service.Private)
+    service.new(name, "https://example.com", 200, 60, service.Private)
 
-  let checked_at = timestamp.from_unix_seconds(1_700_000_001)
+  let assert Ok(Nil) = service_repository.insert(database, monitored_service)
 
-  let check =
-    service_check.ServiceCheck(
-      service_id: service.id(monitored_service),
-      checked_at: checked_at,
-      latency_ms: None,
-      outcome: service_check.Failure(service_check.Timeout),
-      status: service_check.Down,
-    )
-
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, check)
-
-      let query =
-        pog.query(
-          "
-          SELECT
-            status = 'down'
-            AND http_status IS NULL
-            AND latency_ms IS NULL
-            AND error_reason = 'timeout'
-            AND checked_at = $2::timestamptz
-          FROM service_checks
-          WHERE service_id = $1::uuid
-          LIMIT 1
-          ",
-        )
-        |> pog.parameter(
-          service.id(monitored_service)
-          |> service.service_id_to_string
-          |> pog.text,
-        )
-        |> pog.parameter(pog.timestamp(checked_at))
-        |> pog.returning(decode.at([0], decode.bool))
-
-      let assert Ok(pog.Returned(rows: [matches], ..)) =
-        pog.execute(query, transaction)
-
-      assert matches == True
-
-      Error("rollback-for-test")
-    })
-
-  let assert Ok(None) =
-    service_repository.find_by_id(database, service.id(monitored_service))
+  monitored_service
 }
+
+fn http_check(
+  monitored_service: service.Service,
+  checked_at: Int,
+  http_status: Int,
+  latency_ms: Int,
+) -> service_check.ServiceCheck {
+  let status = case http_status == service.expected_status(monitored_service) {
+    True -> service_check.Up
+    False -> service_check.Down
+  }
+
+  service_check.ServiceCheck(
+    service_id: service.id(monitored_service),
+    checked_at: timestamp.from_unix_seconds(checked_at),
+    latency_ms: Some(latency_ms),
+    outcome: service_check.HttpResponse(http_status),
+    status: status,
+  )
+}
+
+fn failure_check(
+  monitored_service: service.Service,
+  checked_at: Int,
+  reason: service_check.ServiceCheckError,
+) -> service_check.ServiceCheck {
+  service_check.ServiceCheck(
+    service_id: service.id(monitored_service),
+    checked_at: timestamp.from_unix_seconds(checked_at),
+    latency_ms: None,
+    outcome: service_check.Failure(reason),
+    status: service_check.Down,
+  )
+}
+
+fn store_check(
+  database: pog.Connection,
+  check: service_check.ServiceCheck,
+) -> Nil {
+  let assert Ok(Nil) = service_check_repository.store(database, check)
+
+  Nil
+}
+
+// -----------------------------------------------------------------------------
+// 1. Persistence: HTTP response and timeout
+// -----------------------------------------------------------------------------
+
+pub fn store_http_and_timeout_columns_test() {
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "Store Test")
+
+    let http = http_check(monitored_service, 1_700_000_000, 200, 42)
+
+    let timeout =
+      failure_check(monitored_service, 1_700_000_060, service_check.Timeout)
+
+    store_check(database, http)
+    store_check(database, timeout)
+
+    // Verify the physical PostgreSQL representation of both outcomes.
+    let query =
+      pog.query(
+        "
+        SELECT (
+          COUNT(*) = 2
+          AND COUNT(*) FILTER (
+            WHERE checked_at = $2::timestamptz
+              AND status = 'up'
+              AND http_status = 200
+              AND latency_ms = 42
+              AND error_reason IS NULL
+          ) = 1
+          AND COUNT(*) FILTER (
+            WHERE checked_at = $3::timestamptz
+              AND status = 'down'
+              AND http_status IS NULL
+              AND latency_ms IS NULL
+              AND error_reason = 'timeout'
+          ) = 1
+        )
+        FROM service_checks
+        WHERE service_id = $1::uuid
+        ",
+      )
+      |> pog.parameter(
+        service.id(monitored_service)
+        |> service.service_id_to_string
+        |> pog.text,
+      )
+      |> pog.parameter(pog.timestamp(http.checked_at))
+      |> pog.parameter(pog.timestamp(timeout.checked_at))
+      |> pog.returning(decode.at([0], decode.bool))
+
+    let assert Ok(pog.Returned(rows: [valid], ..)) =
+      pog.execute(query, database)
+
+    assert valid == True
+    Nil
+  })
+}
+
+// -----------------------------------------------------------------------------
+// 2. Full history: newest first and domain reconstruction
+// -----------------------------------------------------------------------------
 
 pub fn for_service_returns_newest_first_test() {
-  let database = test_postgres.database()
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "History Test")
 
-  let assert Ok(monitored_service) =
-    service.new("History Test", "https://example.com", 200, 60, service.Private)
+    let first = http_check(monitored_service, 1_700_000_000, 200, 42)
+    let second =
+      failure_check(monitored_service, 1_700_000_060, service_check.Timeout)
 
-  let service_id = service.id(monitored_service)
+    store_check(database, first)
+    store_check(database, second)
 
-  let first =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: timestamp.from_unix_seconds(1_700_000_000),
-      latency_ms: Some(42),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
+    let assert Ok([latest, earliest]) =
+      service_check_repository.for_service(
+        database,
+        service.id(monitored_service),
+      )
 
-  let second =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: timestamp.from_unix_seconds(1_700_000_060),
-      latency_ms: None,
-      outcome: service_check.Failure(service_check.Timeout),
-      status: service_check.Down,
-    )
-
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, first)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, second)
-
-      let assert Ok([latest, earliest]) =
-        service_check_repository.for_service(transaction, service_id)
-
-      assert latest.outcome == service_check.Failure(service_check.Timeout)
-
-      assert latest.status == service_check.Down
-      assert latest.latency_ms == None
-
-      assert earliest.outcome == service_check.HttpResponse(200)
-      assert earliest.status == service_check.Up
-      assert earliest.latency_ms == Some(42)
-
-      assert latest.checked_at == second.checked_at
-      assert earliest.checked_at == first.checked_at
-
-      assert latest.service_id == service_id
-      assert earliest.service_id == service_id
-
-      Error("rollback-for-test")
-    })
+    assert latest == second
+    assert earliest == first
+    Nil
+  })
 }
+
+// -----------------------------------------------------------------------------
+// 3. Period queries: inclusive boundaries
+// -----------------------------------------------------------------------------
 
 pub fn between_returns_checks_within_period_test() {
-  let database = test_postgres.database()
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "Period Test")
+    let service_id = service.id(monitored_service)
 
-  let assert Ok(monitored_service) =
-    service.new("Period Test", "https://example.com", 200, 60, service.Private)
+    let first = http_check(monitored_service, 1_700_000_000, 200, 20)
+    let second = http_check(monitored_service, 1_700_000_060, 200, 40)
+    let third =
+      failure_check(monitored_service, 1_700_000_120, service_check.Timeout)
 
-  let service_id = service.id(monitored_service)
+    store_check(database, first)
+    store_check(database, second)
+    store_check(database, third)
 
-  let first_time = timestamp.from_unix_seconds(1_700_000_000)
-  let middle_time = timestamp.from_unix_seconds(1_700_000_060)
-  let last_time = timestamp.from_unix_seconds(1_700_000_120)
+    let assert Ok([latest, earliest]) =
+      service_check_repository.between(
+        database,
+        service_id,
+        second.checked_at,
+        third.checked_at,
+      )
 
-  let first =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: first_time,
-      latency_ms: Some(20),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
+    assert latest == third
+    assert earliest == second
 
-  let middle =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: middle_time,
-      latency_ms: Some(40),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
+    let assert Ok([]) =
+      service_check_repository.between(
+        database,
+        service_id,
+        timestamp.from_unix_seconds(1_700_000_200),
+        timestamp.from_unix_seconds(1_700_000_300),
+      )
 
-  let last =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: last_time,
-      latency_ms: None,
-      outcome: service_check.Failure(service_check.Timeout),
-      status: service_check.Down,
-    )
-
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, first)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, middle)
-
-      let assert Ok(Nil) = service_check_repository.store(transaction, last)
-
-      let assert Ok([newest, oldest]) =
-        service_check_repository.between(
-          transaction,
-          service_id,
-          middle_time,
-          last_time,
-        )
-
-      assert newest.checked_at == last_time
-      assert oldest.checked_at == middle_time
-
-      assert newest.outcome == service_check.Failure(service_check.Timeout)
-
-      assert oldest.outcome == service_check.HttpResponse(200)
-
-      Error("rollback-for-test")
-    })
+    Nil
+  })
 }
+
+// -----------------------------------------------------------------------------
+// 4. Service isolation
+// -----------------------------------------------------------------------------
 
 pub fn history_is_isolated_by_service_test() {
-  let database = test_postgres.database()
+  with_rollback(fn(database) {
+    let first_service = insert_service(database, "First Service")
+    let second_service = insert_service(database, "Second Service")
 
-  let assert Ok(first_service) =
-    service.new(
-      "First Service",
-      "https://first.example.com",
-      200,
-      60,
-      service.Private,
-    )
+    let first = http_check(first_service, 1_700_000_000, 200, 42)
+    let second =
+      failure_check(second_service, 1_700_000_000, service_check.Timeout)
 
-  let assert Ok(second_service) =
-    service.new(
-      "Second Service",
-      "https://second.example.com",
-      200,
-      60,
-      service.Private,
-    )
+    store_check(database, first)
+    store_check(database, second)
 
-  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+    let assert Ok([first_result]) =
+      service_check_repository.for_service(database, service.id(first_service))
 
-  let first_check =
-    service_check.ServiceCheck(
-      service_id: service.id(first_service),
-      checked_at: checked_at,
-      latency_ms: Some(42),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
+    let assert Ok([second_result]) =
+      service_check_repository.for_service(database, service.id(second_service))
 
-  let second_check =
-    service_check.ServiceCheck(
-      service_id: service.id(second_service),
-      checked_at: checked_at,
-      latency_ms: None,
-      outcome: service_check.Failure(service_check.Timeout),
-      status: service_check.Down,
-    )
+    assert first_result == first
+    assert second_result == second
 
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) = service_repository.insert(transaction, first_service)
+    let assert Ok([period_result]) =
+      service_check_repository.between(
+        database,
+        service.id(first_service),
+        first.checked_at,
+        first.checked_at,
+      )
 
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, second_service)
-
-      let assert Ok(Nil) =
-        service_check_repository.store(transaction, first_check)
-
-      let assert Ok(Nil) =
-        service_check_repository.store(transaction, second_check)
-
-      let assert Ok([first_result]) =
-        service_check_repository.for_service(
-          transaction,
-          service.id(first_service),
-        )
-
-      let assert Ok([second_result]) =
-        service_check_repository.for_service(
-          transaction,
-          service.id(second_service),
-        )
-
-      assert first_result.outcome == service_check.HttpResponse(200)
-      assert second_result.outcome
-        == service_check.Failure(service_check.Timeout)
-
-      assert first_result.service_id == service.id(first_service)
-      assert second_result.service_id == service.id(second_service)
-
-      Error("rollback-for-test")
-    })
+    assert period_result == first
+    Nil
+  })
 }
+
+// -----------------------------------------------------------------------------
+// 5. Empty history
+// -----------------------------------------------------------------------------
 
 pub fn empty_history_returns_empty_list_test() {
-  let database = test_postgres.database()
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "Empty History")
+    let service_id = service.id(monitored_service)
 
-  let assert Ok(monitored_service) =
-    service.new(
-      "Empty History Test",
-      "https://empty.example.com",
-      200,
-      60,
-      service.Private,
-    )
+    let assert Ok([]) =
+      service_check_repository.for_service(database, service_id)
 
-  let service_id = service.id(monitored_service)
+    let assert Ok([]) =
+      service_check_repository.between(
+        database,
+        service_id,
+        timestamp.from_unix_seconds(1_700_000_000),
+        timestamp.from_unix_seconds(1_700_000_120),
+      )
 
-  let from = timestamp.from_unix_seconds(1_700_000_000)
-  let to = timestamp.from_unix_seconds(1_700_000_120)
-
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
-
-      // O serviço existe, mas não possui verificações.
-
-      let assert Ok([]) =
-        service_check_repository.for_service(transaction, service_id)
-
-      let assert Ok([]) =
-        service_check_repository.between(transaction, service_id, from, to)
-
-      Error("rollback-for-test")
-    })
+    Nil
+  })
 }
 
+// -----------------------------------------------------------------------------
+// 6. Deterministic ordering for identical timestamps
+// -----------------------------------------------------------------------------
+
 pub fn checks_with_same_timestamp_are_ordered_test() {
-  let database = test_postgres.database()
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "Same Timestamp")
 
-  let assert Ok(monitored_service) =
-    service.new(
-      "Same Timestamp Test",
-      "https://example.com",
-      200,
-      60,
-      service.Private,
-    )
+    let first = http_check(monitored_service, 1_700_000_000, 200, 20)
+    let second = http_check(monitored_service, 1_700_000_000, 503, 50)
 
-  let service_id = service.id(monitored_service)
-  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+    store_check(database, first)
+    store_check(database, second)
 
-  let first =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: checked_at,
-      latency_ms: Some(20),
-      outcome: service_check.HttpResponse(200),
-      status: service_check.Up,
-    )
+    let service_id = service.id(monitored_service)
 
-  let second =
-    service_check.ServiceCheck(
-      service_id: service_id,
-      checked_at: checked_at,
-      latency_ms: Some(50),
-      outcome: service_check.HttpResponse(503),
-      status: service_check.Down,
-    )
+    let assert Ok([latest, earliest]) =
+      service_check_repository.for_service(database, service_id)
 
-  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
-    pog.transaction(database, fn(transaction) {
-      let assert Ok(Nil) =
-        service_repository.insert(transaction, monitored_service)
+    assert latest == second
+    assert earliest == first
 
-      let assert Ok(Nil) = service_check_repository.store(transaction, first)
+    let assert Ok([newest, oldest]) =
+      service_check_repository.between(
+        database,
+        service_id,
+        first.checked_at,
+        first.checked_at,
+      )
 
-      let assert Ok(Nil) = service_check_repository.store(transaction, second)
+    assert newest == second
+    assert oldest == first
+    Nil
+  })
+}
 
-      let assert Ok([latest, earliest]) =
-        service_check_repository.for_service(transaction, service_id)
+// -----------------------------------------------------------------------------
+// 7. Failure reasons: complete round-trip
+// -----------------------------------------------------------------------------
 
-      // O segundo INSERT deve aparecer primeiro.
-      assert latest.outcome == service_check.HttpResponse(503)
-      assert earliest.outcome == service_check.HttpResponse(200)
+pub fn failure_reasons_round_trip_test() {
+  with_rollback(fn(database) {
+    let monitored_service = insert_service(database, "Failure Reasons")
 
-      // Ambos preservam o mesmo timestamp.
-      assert latest.checked_at == checked_at
-      assert earliest.checked_at == checked_at
+    let timeout =
+      failure_check(monitored_service, 1_700_000_000, service_check.Timeout)
 
-      // Os limites do between() são inclusivos.
-      let assert Ok([newest_in_period, oldest_in_period]) =
-        service_check_repository.between(
-          transaction,
-          service_id,
-          checked_at,
-          checked_at,
-        )
+    let connection_failed =
+      failure_check(
+        monitored_service,
+        1_700_000_060,
+        service_check.ConnectionFailed,
+      )
 
-      assert newest_in_period.outcome == service_check.HttpResponse(503)
+    let invalid_request =
+      failure_check(
+        monitored_service,
+        1_700_000_120,
+        service_check.InvalidRequest,
+      )
 
-      assert oldest_in_period.outcome == service_check.HttpResponse(200)
+    let invalid_response =
+      failure_check(
+        monitored_service,
+        1_700_000_180,
+        service_check.InvalidResponse,
+      )
 
-      Error("rollback-for-test")
-    })
+    store_check(database, timeout)
+    store_check(database, connection_failed)
+    store_check(database, invalid_request)
+    store_check(database, invalid_response)
+
+    let assert Ok([fourth, third, second, first]) =
+      service_check_repository.for_service(
+        database,
+        service.id(monitored_service),
+      )
+
+    assert first == timeout
+    assert second == connection_failed
+    assert third == invalid_request
+    assert fourth == invalid_response
+    Nil
+  })
 }
