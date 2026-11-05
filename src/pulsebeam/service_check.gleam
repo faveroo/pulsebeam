@@ -32,19 +32,13 @@ pub type ServiceCheck {
   )
 }
 
-pub fn check(service: service.Service) -> ServiceCheck {
-  let url = service.url(service)
+pub fn check(monitored_service: service.Service) -> ServiceCheck {
+  let url = service.url(monitored_service)
   let checked_at = timestamp.system_time()
 
   case request.to(url) {
     Error(_) ->
-      ServiceCheck(
-        service_id: service.id(service),
-        checked_at: checked_at,
-        latency_ms: None,
-        outcome: Failure(InvalidRequest),
-        status: Down,
-      )
+      from_result(monitored_service, checked_at, Error(InvalidRequest), None)
 
     Ok(req) -> {
       let started_at = timestamp.system_time()
@@ -53,12 +47,11 @@ pub fn check(service: service.Service) -> ServiceCheck {
 
       case response {
         Error(error) ->
-          ServiceCheck(
-            service_id: service.id(service),
-            checked_at: checked_at,
-            latency_ms: None,
-            outcome: Failure(map_http_error(error)),
-            status: Down,
+          from_result(
+            monitored_service,
+            checked_at,
+            Error(map_http_error(error)),
+            None,
           )
 
         Ok(response) -> {
@@ -67,24 +60,44 @@ pub fn check(service: service.Service) -> ServiceCheck {
             |> duration.to_milliseconds
             |> Some
 
-          let status = case
-            response.status == service.expected_status(service)
-          {
-            True -> Up
-            False -> Down
-          }
-
-          ServiceCheck(
-            service_id: service.id(service),
-            checked_at: checked_at,
-            latency_ms: latency,
-            outcome: HttpResponse(response.status),
-            status: status,
+          from_result(
+            monitored_service,
+            checked_at,
+            Ok(response.status),
+            latency,
           )
         }
       }
     }
   }
+}
+
+pub fn from_result(
+  monitored_service: service.Service,
+  checked_at: timestamp.Timestamp,
+  http_result: Result(Int, ServiceCheckError),
+  latency_ms: Option(Int),
+) -> ServiceCheck {
+  let #(outcome, status, latency) = case http_result {
+    Ok(code) -> {
+      let status = case code == service.expected_status(monitored_service) {
+        True -> Up
+        False -> Down
+      }
+
+      #(HttpResponse(code), status, latency_ms)
+    }
+
+    Error(reason) -> #(Failure(reason), Down, None)
+  }
+
+  ServiceCheck(
+    service_id: service.id(monitored_service),
+    checked_at: checked_at,
+    latency_ms: latency,
+    outcome: outcome,
+    status: status,
+  )
 }
 
 pub fn checked_at(service_check: ServiceCheck) -> timestamp.Timestamp {
