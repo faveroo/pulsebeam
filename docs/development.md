@@ -58,15 +58,19 @@ The credentials above are intended for local development only. Do not reuse them
 
 SQL migrations are stored in `db/migrations/`.
 
-Apply the initial services migration:
+Apply both migrations in order:
 
 ```bash
 docker exec -i pulsebeam-postgres \
-  psql -U pulsebeam -d pulsebeam \
+  psql -v ON_ERROR_STOP=1 -U pulsebeam -d pulsebeam \
   < db/migrations/0001_create_services.sql
+
+docker exec -i pulsebeam-postgres \
+  psql -v ON_ERROR_STOP=1 -U pulsebeam -d pulsebeam \
+  < db/migrations/0002_create_service_checks.sql
 ```
 
-This migration creates the `services` table with its primary key and domain constraints.
+The first migration creates `services`; the second creates `service_checks`, its service foreign key, outcome constraints, and history index. Run each migration **once** on a fresh database; there is no migration tracking or automatic replay yet.
 
 Migrations are currently applied manually. An automated migration runner has not been implemented.
 
@@ -81,13 +85,19 @@ docker exec pulsebeam-postgres \
   createdb -U pulsebeam -O pulsebeam pulsebeam_test
 ```
 
-Apply the schema:
+Apply the same migrations to the test database, in order:
 
 ```bash
 docker exec -i pulsebeam-postgres \
-  psql -U pulsebeam -d pulsebeam_test \
+  psql -v ON_ERROR_STOP=1 -U pulsebeam -d pulsebeam_test \
   < db/migrations/0001_create_services.sql
+
+docker exec -i pulsebeam-postgres \
+  psql -v ON_ERROR_STOP=1 -U pulsebeam -d pulsebeam_test \
+  < db/migrations/0002_create_service_checks.sql
 ```
+
+Do not reapply these `CREATE TABLE` scripts to a database in which the tables already exist.
 
 Do not run destructive integration tests against the development or production database.
 
@@ -107,7 +117,9 @@ gleam test
 
 The suite currently includes both domain tests and PostgreSQL integration tests. Therefore, the test database must be available when running the complete suite.
 
-Integration tests use transactions and explicit rollbacks to avoid leaving test records behind.
+Integration tests for services and service checks use transactions and explicit rollbacks to avoid leaving test records behind. The helper in `test/support/postgres.gleam` creates a new named pool per test, limits each pool to one connection, and waits until the connection is ready; **it does not explicitly shut down those pools**. The test runner currently requires a running PostgreSQL instance.
+
+See [Persistence Architecture](./persistence.md#technical-debt-and-follow-up) for the outstanding pool lifecycle and CI isolation work.
 
 ## Code Formatting
 
@@ -131,11 +143,13 @@ The persistence implementation is separated into repository contracts and infras
 src/pulsebeam/
 ├── repository/
 │   ├── persistence_error.gleam
-│   └── service_repository.gleam
+│   ├── service_repository.gleam
+│   └── service_check_repository.gleam
 └── infrastructure/
     └── postgres/
         ├── connection.gleam
-        └── service_repository.gleam
+        ├── service_repository.gleam
+        └── service_check_repository.gleam
 ```
 
 The repository contract defines the operations expected by the application.
@@ -147,4 +161,5 @@ The PostgreSQL adapter implements these operations using `pog`, without exposing
 - Database migrations are applied manually.
 - The complete test suite currently requires PostgreSQL.
 - Test database setup is not yet automated.
-- Persistent ServiceCheck history and monitoring scheduling are part of subsequent development stages.
+- Persistent ServiceCheck history is implemented; automated monitoring scheduling and restart recovery remain future work.
+- Pool lifecycle management, standalone domain-test execution, and automated CI integration-test setup remain technical debt.
