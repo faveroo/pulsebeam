@@ -1,6 +1,6 @@
 # Persistence Architecture
 
-> Status: Stage 4 baseline for Issue #14. This document defines persistence boundaries and expected behavior. It is not a concrete PostgreSQL implementation.
+> Status: Stage 4 persistence architecture (ADR-0003). The PostgreSQL `ServiceRepository` and `ServiceCheckRepository` adapters are implemented through Issues #16 and #17; scheduler integration and supervised runtime wiring remain future work.
 
 ## Purpose
 
@@ -60,16 +60,17 @@ Required Stage 4 capabilities:
 - preserve the original `ServiceId` when reconstructing a persisted Service;
 - distinguish a missing Service from a persistence failure.
 
-Conceptual contract:
+Implemented adapter operations:
 
 ```text
 ServiceRepository
-├── save(Service)
-├── find_by_id(ServiceId)
-└── list()
+├── insert(Service)
+├── update(Service)
+├── find_by_id(ServiceId) -> Result(Option(Service), PersistenceError)
+└── list() -> Result(List(Service), PersistenceError)
 ```
 
-The exact Gleam function/type representation will be decided during implementation. This document defines behavior, not a required syntax.
+The PostgreSQL adapter receives a `pog.Connection` in addition to each operation's domain inputs. The independent repository contract lives in `src/pulsebeam/repository/service_repository.gleam`; application-level wiring of a concrete adapter remains separate from the domain.
 
 The repository must preserve at least:
 
@@ -101,28 +102,24 @@ Required Stage 4 capabilities:
 - preserve failure reason when present;
 - distinguish missing optional data from real zero/default values.
 
-Conceptual contract:
+Implemented adapter operations:
 
 ```text
 ServiceCheckRepository
-├── store(ServiceCheck)
-├── for_service(ServiceId)
-└── between(ServiceId, from, to)
+├── store(ServiceCheck) -> Result(Nil, PersistenceError)
+├── for_service(ServiceId) -> Result(List(ServiceCheck), PersistenceError)
+└── between(ServiceId, from, to) -> Result(List(ServiceCheck), PersistenceError)
 ```
+
+The adapter lives in `src/pulsebeam/infrastructure/postgres/service_check_repository.gleam`, accepts a `pog.Connection`, and reconstructs domain `ServiceCheck` values at the persistence boundary.
 
 The Stage 3 in-memory `CheckHistory` may remain useful for pure domain tests, but it is not the durable source of truth for Stage 4.
 
-## Query ordering
+## Query ordering and time windows
 
-Historical repository queries should return an explicitly documented order. The Stage 3 history API currently exposes newest checks first, so the initial PostgreSQL adapter should preserve **newest-first** ordering unless a later requirement deliberately changes the public contract.
+Both `for_service` and `between` return checks **newest first** with `ORDER BY checked_at DESC, id DESC`. The database-generated identity column is a deterministic tie-breaker when two checks share the same timestamp. `between` uses inclusive boundaries (`checked_at >= from AND checked_at <= to`); no matching checks return `Ok([])`.
 
-In SQL terms, the expected query shape will naturally support an index on service and check time, for example conceptually:
-
-```text
-(service_id, checked_at)
-```
-
-Exact schema and migration definitions belong to later Stage 4 implementation issues.
+The concrete migration `db/migrations/0002_create_service_checks.sql` creates `idx_service_checks_history` on `(service_id, checked_at DESC, id DESC)` to support these access patterns.
 
 ## Persistence errors
 
@@ -135,7 +132,8 @@ PersistenceError
 ├── ConnectionFailed
 ├── QueryFailed
 ├── Conflict
-└── InvalidPersistedData
+├── InvalidPersistedData
+└── NotFound
 ```
 
 These names are architectural guidance; the exact Gleam type can evolve during implementation if the concrete adapter exposes a meaningful distinction that the application must handle.
@@ -158,6 +156,12 @@ Used when a row exists but cannot be safely reconstructed into a valid domain va
 
 Examples include an invalid `ServiceId`, unsupported visibility value, or data that violates required domain invariants.
 
+### NotFound
+
+Used when an update targets a Service that does not exist. A lookup with no match instead returns `Ok(None)` for Services or `Ok([])` for check history.
+
+The current ServiceCheck adapter maps unavailable connections to `ConnectionFailed`, decoding/reconstruction failures to `InvalidPersistedData`, and other PostgreSQL/query failures to `QueryFailed`.
+
 ## Failure isolation
 
 Persistence failures must be represented as values and handled by the application/runtime layer.
@@ -172,51 +176,41 @@ Monitor C -> continues independently
 
 The repository layer must not rely on application-wide crashes as normal error handling.
 
-## Domain reconstruction
+## Domain reconstruction and representation
 
-New domain entities and persisted entities have different identity lifecycles.
+New Services receive UUID v7 identities; persisted Services are reconstructed from their original, validated `ServiceId` without generating a replacement.
 
-For a new Service:
+ServiceCheck persistence preserves the existing domain sum type:
 
-```text
-new Service -> generate UUID v7 -> persist same ID
-```
+- `HttpResponse(code)` maps to `http_status = code` and `error_reason = NULL`.
+- `Failure(Timeout | ConnectionFailed | InvalidRequest | InvalidResponse)` maps to `http_status = NULL` and one of `timeout`, `connection_failed`, `invalid_request`, `invalid_response` in `error_reason`.
+- `latency_ms` is nullable; SQL `NULL` becomes `None` rather than `Some(0)`.
+- `Up` and `Down` map to `up` and `down` in the status column.
+- `service_id` is stored as PostgreSQL UUID. The adapter converts it to validated `ServiceId` at load time.
+- `checked_at` is stored as `TIMESTAMPTZ`. Writes and time-window parameters use `pog.timestamp`; reads select `(EXTRACT(EPOCH FROM checked_at) * 1000000)::bigint` and decode it with `pog.timestamp_decoder()` to preserve microsecond timestamps.
 
-For a persisted Service:
+The `CheckRow` decoder converts columns into an intermediate record before `row_to_check` reconstructs the domain value. Unsupported status/error strings, malformed combinations of response/error columns, invalid identifiers, and a `Failure` marked `Up` produce `InvalidPersistedData` instead of silently generating an invalid check.
 
-```text
-row -> validate persisted ID -> reconstruct Service with original ID
-```
+## Implemented relational schema
 
-Loading an existing Service must never call the new-Service path and generate a replacement identifier. The controlled `ServiceId` reconstruction API is tracked separately by Stage 4 Issue #15.
+The authoritative migrations are:
 
-## Initial relational shape
+- [`0001_create_services.sql`](../db/migrations/0001_create_services.sql): `services` configuration and UUID primary key.
+- [`0002_create_service_checks.sql`](../db/migrations/0002_create_service_checks.sql): durable check history.
 
-This is a conceptual model only. Exact SQL types, constraints, migrations, and adapter code belong to later issues.
+The `service_checks` table contains:
 
-```text
-services
-├── id                 primary identity
-├── name
-├── url
-├── expected_status
-├── interval_seconds
-├── enabled
-├── visibility
-├── created_at
-└── updated_at
+| Column | PostgreSQL type | Notes |
+| --- | --- | --- |
+| `id` | `BIGINT GENERATED ALWAYS AS IDENTITY` | Database primary key; not part of domain `ServiceCheck` |
+| `service_id` | `UUID NOT NULL` | Foreign key to `services(id)` |
+| `checked_at` | `TIMESTAMPTZ NOT NULL` | Time of observation |
+| `status` | `TEXT NOT NULL` | Restricted to `up` or `down` |
+| `http_status` | `INTEGER NULL` | When present, 100 through 599 |
+| `latency_ms` | `INTEGER NULL` | Nonnegative when present |
+| `error_reason` | `TEXT NULL` | Restricted to the four domain failure codes |
 
-service_checks
-├── id                 persistence identity if required
-├── service_id          reference -> services
-├── checked_at
-├── status
-├── http_status         optional
-├── latency_ms          optional
-└── error_reason        optional
-```
-
-The database representation may use PostgreSQL UUID or text-compatible forms as long as the adapter preserves the domain `ServiceId` contract. The exact choice is deferred to the concrete persistence implementation.
+Database constraints require **exactly one** of `http_status` and `error_reason` to be non-null, and prevent a recorded failure from having status `up`. The foreign key does not cascade deletion of check history. This schema is for Stage 4; future migrations may extend it as product requirements evolve.
 
 ## Transactions and consistency
 
@@ -237,6 +231,29 @@ The intended layers are:
 
 An in-memory fake repository can be used where useful, but it must model the same observable behavior expected from the concrete repository contract.
 
+Issue #17 integration tests cover HTTP and failure persistence, all failure reasons, full domain round-trips, inclusive time windows, service isolation, empty results, and deterministic ordering for identical timestamps. Tests use the dedicated `pulsebeam_test` PostgreSQL database and transaction rollbacks; see [Local Development](./development.md) for setup.
+
+## Technical debt and follow-up
+
+### PostgreSQL pool lifecycle and test isolation
+
+`test/support/postgres.gleam` currently starts a **new named `pog` pool for each integration test**, with `pool_size = 1` and readiness polling. Queries return their connection to the pool, but finishing a query does **not** explicitly stop the pool. The current helper does not tear pools down after tests.
+
+An intermittent EUnit/`pgo` timeout was observed when the suite grew; limiting pool size coincided with successful subsequent runs. **The root cause was not proven**, so this is a resource-lifecycle risk to investigate rather than a confirmed connection-exhaustion defect.
+
+Follow-up work (appropriate for the Stage 4 integration/runtime infrastructure work, including Issue #23):
+
+- Provide supervised, application-owned pool startup/shutdown rather than one pool per check or test in production.
+- Use a managed/shared test pool or explicit pool cleanup, preserving each test's independent rollback transaction.
+- Add connection-count/concurrency monitoring and test-run timeout diagnostics.
+- Make test database provisioning and integration-test execution reproducible in CI, separate from pure domain tests.
+
+### Persistence diagnostics and boundaries
+
+The ServiceCheck adapter maps unclassified SQL failures, including foreign-key violations, to `QueryFailed`. Consider more specific error mappings if application workflows need to distinguish missing parent Services or particular constraints; do not leak `pog` errors into the domain.
+
+The repository contracts are declared independently of PostgreSQL but the application-level composition/wiring of those function records is not yet implemented. This belongs with the runtime integration work.
+
 ## Retention and cleanup
 
 No automatic `ServiceCheck` retention period is defined in Stage 4.
@@ -245,9 +262,10 @@ Historical data will be retained until product requirements and real storage gro
 
 This decision should be revisited before historical volume becomes an operational concern.
 
-## Out of scope for Issue #14
+## Historical scope of Issue #14
 
-This architecture issue does not implement:
+The original architecture-only Issue #14 did not implement the items below. Some have since been delivered in Issues #15–#17; this list is retained as historical context rather than a statement of current functionality:
+
 
 - the `pog` dependency;
 - PostgreSQL connection configuration;
