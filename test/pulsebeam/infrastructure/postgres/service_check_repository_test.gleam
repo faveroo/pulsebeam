@@ -340,3 +340,107 @@ pub fn history_is_isolated_by_service_test() {
       Error("rollback-for-test")
     })
 }
+
+pub fn empty_history_returns_empty_list_test() {
+  let database = test_postgres.database()
+
+  let assert Ok(monitored_service) =
+    service.new(
+      "Empty History Test",
+      "https://empty.example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let service_id = service.id(monitored_service)
+
+  let from = timestamp.from_unix_seconds(1_700_000_000)
+  let to = timestamp.from_unix_seconds(1_700_000_120)
+
+  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
+    pog.transaction(database, fn(transaction) {
+      let assert Ok(Nil) =
+        service_repository.insert(transaction, monitored_service)
+
+      // O serviço existe, mas não possui verificações.
+
+      let assert Ok([]) =
+        service_check_repository.for_service(transaction, service_id)
+
+      let assert Ok([]) =
+        service_check_repository.between(transaction, service_id, from, to)
+
+      Error("rollback-for-test")
+    })
+}
+
+pub fn checks_with_same_timestamp_are_ordered_test() {
+  let database = test_postgres.database()
+
+  let assert Ok(monitored_service) =
+    service.new(
+      "Same Timestamp Test",
+      "https://example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let service_id = service.id(monitored_service)
+  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+
+  let first =
+    service_check.ServiceCheck(
+      service_id: service_id,
+      checked_at: checked_at,
+      latency_ms: Some(20),
+      outcome: service_check.HttpResponse(200),
+      status: service_check.Up,
+    )
+
+  let second =
+    service_check.ServiceCheck(
+      service_id: service_id,
+      checked_at: checked_at,
+      latency_ms: Some(50),
+      outcome: service_check.HttpResponse(503),
+      status: service_check.Down,
+    )
+
+  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
+    pog.transaction(database, fn(transaction) {
+      let assert Ok(Nil) =
+        service_repository.insert(transaction, monitored_service)
+
+      let assert Ok(Nil) = service_check_repository.store(transaction, first)
+
+      let assert Ok(Nil) = service_check_repository.store(transaction, second)
+
+      let assert Ok([latest, earliest]) =
+        service_check_repository.for_service(transaction, service_id)
+
+      // O segundo INSERT deve aparecer primeiro.
+      assert latest.outcome == service_check.HttpResponse(503)
+      assert earliest.outcome == service_check.HttpResponse(200)
+
+      // Ambos preservam o mesmo timestamp.
+      assert latest.checked_at == checked_at
+      assert earliest.checked_at == checked_at
+
+      // Os limites do between() são inclusivos.
+      let assert Ok([newest_in_period, oldest_in_period]) =
+        service_check_repository.between(
+          transaction,
+          service_id,
+          checked_at,
+          checked_at,
+        )
+
+      assert newest_in_period.outcome == service_check.HttpResponse(503)
+
+      assert oldest_in_period.outcome == service_check.HttpResponse(200)
+
+      Error("rollback-for-test")
+    })
+}
