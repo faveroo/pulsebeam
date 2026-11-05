@@ -194,3 +194,72 @@ pub fn for_service_returns_newest_first_test() {
       Error("rollback-for-test")
     })
 }
+
+pub fn between_returns_checks_within_period_test() {
+  let database = test_postgres.database()
+
+  let assert Ok(monitored_service) =
+    service.new("Period Test", "https://example.com", 200, 60, service.Private)
+
+  let service_id = service.id(monitored_service)
+
+  let first_time = timestamp.from_unix_seconds(1_700_000_000)
+  let middle_time = timestamp.from_unix_seconds(1_700_000_060)
+  let last_time = timestamp.from_unix_seconds(1_700_000_120)
+
+  let first =
+    service_check.ServiceCheck(
+      service_id: service_id,
+      checked_at: first_time,
+      latency_ms: Some(20),
+      outcome: service_check.HttpResponse(200),
+      status: service_check.Up,
+    )
+
+  let middle =
+    service_check.ServiceCheck(
+      service_id: service_id,
+      checked_at: middle_time,
+      latency_ms: Some(40),
+      outcome: service_check.HttpResponse(200),
+      status: service_check.Up,
+    )
+
+  let last =
+    service_check.ServiceCheck(
+      service_id: service_id,
+      checked_at: last_time,
+      latency_ms: None,
+      outcome: service_check.Failure(service_check.Timeout),
+      status: service_check.Down,
+    )
+
+  let assert Error(pog.TransactionRolledBack("rollback-for-test")) =
+    pog.transaction(database, fn(transaction) {
+      let assert Ok(Nil) =
+        service_repository.insert(transaction, monitored_service)
+
+      let assert Ok(Nil) = service_check_repository.store(transaction, first)
+
+      let assert Ok(Nil) = service_check_repository.store(transaction, middle)
+
+      let assert Ok(Nil) = service_check_repository.store(transaction, last)
+
+      let assert Ok([newest, oldest]) =
+        service_check_repository.between(
+          transaction,
+          service_id,
+          middle_time,
+          last_time,
+        )
+
+      assert newest.checked_at == last_time
+      assert oldest.checked_at == middle_time
+
+      assert newest.outcome == service_check.Failure(service_check.Timeout)
+
+      assert oldest.outcome == service_check.HttpResponse(200)
+
+      Error("rollback-for-test")
+    })
+}

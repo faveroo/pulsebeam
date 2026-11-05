@@ -98,6 +98,45 @@ pub fn for_service(
   }
 }
 
+pub fn between(
+  connection: pog.Connection,
+  service_id: service.ServiceId,
+  from: timestamp.Timestamp,
+  to: timestamp.Timestamp,
+) -> Result(List(service_check.ServiceCheck), PersistenceError) {
+  let query =
+    pog.query(
+      "
+      SELECT
+        service_id::text,
+        (EXTRACT(EPOCH FROM checked_at) * 1000000)::bigint AS checked_at,
+        status,
+        http_status,
+        latency_ms,
+        error_reason
+      FROM service_checks
+      WHERE service_id = $1::uuid
+        AND checked_at >= $2::timestamptz
+        AND checked_at <= $3::timestamptz
+      ORDER BY checked_at DESC, id DESC
+      ",
+    )
+    |> pog.parameter(service_id |> service.service_id_to_string |> pog.text)
+    |> pog.parameter(pog.timestamp(from))
+    |> pog.parameter(pog.timestamp(to))
+    |> pog.returning(check_row_decoder())
+
+  case pog.execute(query, connection) {
+    Ok(pog.Returned(rows: rows, ..)) -> gleam_list.try_map(rows, row_to_check)
+
+    Error(pog.ConnectionUnavailable) -> Error(ConnectionFailed)
+
+    Error(pog.UnexpectedResultType(_)) -> Error(InvalidPersistedData)
+
+    Error(_) -> Error(QueryFailed)
+  }
+}
+
 fn status_to_string(status: service_check.CheckStatus) -> String {
   case status {
     service_check.Up -> "up"
