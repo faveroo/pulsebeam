@@ -1,7 +1,4 @@
-import gleam/http/request
-import gleam/httpc
-import gleam/option.{type Option, None, Some}
-import gleam/time/duration
+import gleam/option.{type Option, None}
 import gleam/time/timestamp
 import pulsebeam/service.{type ServiceId}
 
@@ -30,46 +27,6 @@ pub type ServiceCheck {
     outcome: ServiceCheckOutcome,
     status: CheckStatus,
   )
-}
-
-pub fn check(monitored_service: service.Service) -> ServiceCheck {
-  let url = service.url(monitored_service)
-  let checked_at = timestamp.system_time()
-
-  case request.to(url) {
-    Error(_) ->
-      from_result(monitored_service, checked_at, Error(InvalidRequest), None)
-
-    Ok(req) -> {
-      let started_at = timestamp.system_time()
-      let response = httpc.send(req)
-      let finished_at = timestamp.system_time()
-
-      case response {
-        Error(error) ->
-          from_result(
-            monitored_service,
-            checked_at,
-            Error(map_http_error(error)),
-            None,
-          )
-
-        Ok(response) -> {
-          let latency =
-            timestamp.difference(started_at, finished_at)
-            |> duration.to_milliseconds
-            |> Some
-
-          from_result(
-            monitored_service,
-            checked_at,
-            Ok(response.status),
-            latency,
-          )
-        }
-      }
-    }
-  }
 }
 
 pub fn from_result(
@@ -118,12 +75,4 @@ pub fn outcome(service_check: ServiceCheck) -> ServiceCheckOutcome {
 
 pub fn service_id(service_check: ServiceCheck) -> ServiceId {
   service_check.service_id
-}
-
-fn map_http_error(error: httpc.HttpError) -> ServiceCheckError {
-  case error {
-    httpc.ResponseTimeout -> Timeout
-    httpc.FailedToConnect(_, _) -> ConnectionFailed
-    httpc.InvalidUtf8Response -> InvalidResponse
-  }
 }
