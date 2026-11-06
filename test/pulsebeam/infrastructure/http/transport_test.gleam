@@ -1,107 +1,91 @@
+import gleam/int
 import gleam/option
 import gleam/time/timestamp
+import pulsebeam/infrastructure/http/transport
 import pulsebeam/monitoring/live
 import pulsebeam/service
 import pulsebeam/service_check
+import support/http_server
 
-// Temporary live HTTP integration tests, moved from service_check_test.gleam.
-// Step 10 will replace the external example.com dependency with a local server.
-fn successful_check(
+fn local_url(status: Int) -> String {
+  let assert Ok(port) = http_server.start(status)
+
+  "http://127.0.0.1:" <> int.to_string(port) <> "/"
+}
+
+fn run_http_check(
   expected_status: Int,
+  response_status: Int,
 ) -> #(service.Service, service_check.ServiceCheck) {
   let assert Ok(monitored_service) =
     service.new(
-      "Example",
-      "https://example.com",
+      "HTTP Integration Test",
+      local_url(response_status),
       expected_status,
       60,
-      service.Community,
+      service.Private,
     )
 
   #(monitored_service, live.run(monitored_service))
 }
 
-fn failed_connection_check() -> #(service.Service, service_check.ServiceCheck) {
-  let assert Ok(monitored_service) =
-    service.new("Unavailable", "http://127.0.0.1:1", 200, 60, service.Private)
+pub fn successful_http_check_preserves_result_test() {
+  let #(monitored_service, check) = run_http_check(200, 200)
 
-  #(monitored_service, live.run(monitored_service))
-}
+  assert check.service_id == service.id(monitored_service)
+  assert check.status == service_check.Up
+  assert check.outcome == service_check.HttpResponse(200)
 
-pub fn successful_check_preserves_service_reference_test() {
-  let #(monitored_service, check) = successful_check(200)
+  let assert option.Some(latency) = check.latency_ms
+  assert latency >= 0
 
-  assert service_check.service_id(check) == service.id(monitored_service)
-}
+  let #(seconds, _) =
+    check.checked_at
+    |> timestamp.to_unix_seconds_and_nanoseconds
 
-pub fn successful_check_records_http_status_test() {
-  let #(_, check) = successful_check(200)
-
-  assert service_check.outcome(check) == service_check.HttpResponse(200)
-}
-
-pub fn expected_http_status_is_up_test() {
-  let #(_, check) = successful_check(200)
-
-  assert service_check.status(check) == service_check.Up
+  assert seconds > 0
 }
 
 pub fn unexpected_http_status_is_down_test() {
-  let #(_, check) = successful_check(404)
+  let #(_, check) = run_http_check(404, 200)
 
-  assert service_check.status(check) == service_check.Down
-  assert service_check.outcome(check) == service_check.HttpResponse(200)
+  assert check.status == service_check.Down
+  assert check.outcome == service_check.HttpResponse(200)
 }
 
-pub fn successful_check_records_timestamp_test() {
-  let #(_, check) = successful_check(200)
+pub fn http_503_is_down_but_not_transport_failure_test() {
+  let #(_, check) = run_http_check(200, 503)
+
+  assert check.status == service_check.Down
+  assert check.outcome == service_check.HttpResponse(503)
+}
+
+pub fn connection_failure_preserves_result_test() {
+  let assert Ok(monitored_service) =
+    service.new("Unavailable", "http://127.0.0.1:1", 200, 60, service.Private)
+
+  let check = live.run(monitored_service)
+
+  assert check.service_id == service.id(monitored_service)
+  assert check.status == service_check.Down
+  assert check.outcome == service_check.Failure(service_check.ConnectionFailed)
+  assert check.latency_ms == option.None
 
   let #(seconds, _) =
-    service_check.checked_at(check)
+    check.checked_at
     |> timestamp.to_unix_seconds_and_nanoseconds
 
   assert seconds > 0
 }
 
-pub fn successful_check_records_latency_test() {
-  let #(_, check) = successful_check(200)
+pub fn transport_returns_http_200_test() {
+  let http = transport.new()
 
-  let assert option.Some(latency) = service_check.latency_ms(check)
-
-  assert latency >= 0
+  assert http.get(local_url(200)) == Ok(200)
 }
 
-pub fn failed_connection_is_down_test() {
-  let #(_, check) = failed_connection_check()
+pub fn transport_returns_http_503_test() {
+  let http = transport.new()
 
-  assert service_check.status(check) == service_check.Down
-}
-
-pub fn failed_connection_preserves_reason_test() {
-  let #(_, check) = failed_connection_check()
-
-  assert service_check.outcome(check)
-    == service_check.Failure(service_check.ConnectionFailed)
-}
-
-pub fn failed_connection_has_no_latency_test() {
-  let #(_, check) = failed_connection_check()
-
-  assert service_check.latency_ms(check) == option.None
-}
-
-pub fn failed_connection_records_timestamp_test() {
-  let #(_, check) = failed_connection_check()
-
-  let #(seconds, _) =
-    service_check.checked_at(check)
-    |> timestamp.to_unix_seconds_and_nanoseconds
-
-  assert seconds > 0
-}
-
-pub fn failed_connection_preserves_service_reference_test() {
-  let #(monitored_service, check) = failed_connection_check()
-
-  assert service_check.service_id(check) == service.id(monitored_service)
+  assert http.get(local_url(503)) == Ok(503)
 }
