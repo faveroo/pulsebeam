@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Stage 3 Monitoring Core completed. Stage 4 PostgreSQL persistence for Services and ServiceChecks implemented through Issues #16 and #17; runtime scheduling and supervision are still pending. This document defines responsibility boundaries, not a frozen folder structure.
+> Status: Stage 3 Monitoring Core completed. Stage 4 PostgreSQL persistence implemented through Issues #16 and #17. Issue #18 adds replaceable HTTP/clock boundaries and monotonic latency timing; runtime scheduling, supervision, and restart recovery remain pending. This document defines responsibility boundaries, not a frozen folder structure.
 
 ## Architectural direction
 
@@ -76,7 +76,7 @@ Expose application capabilities through:
 Stage 3 introduced four core modules:
 
 - `service.gleam` — service identity, validation, visibility, and enabled state;
-- `service_check.gleam` — HTTP execution, timestamp, latency, outcome preservation, and UP/DOWN classification;
+- `service_check.gleam` — originally combined HTTP execution, timing, and UP/DOWN classification; Issue #18 moved external effects into adapters while retaining pure classification and outcome preservation in the domain;
 - `check_history.gleam` — immutable in-memory history and time/service filtering;
 - `uptime.gleam` — uptime calculation and 24h/7d/30d period rules.
 
@@ -128,6 +128,33 @@ The PostgreSQL adapter is responsible for:
 - mapping database/client failures to PulseBeam persistence errors;
 - preserving original Service identity when loading persisted records.
 
+## HTTP and clock boundaries (Issue #18)
+
+Monitoring check execution now uses explicit, replaceable Gleam function-record ports:
+
+- `monitoring/ports.gleam` declares `HttpTransport(get: fn(String) -> Result(Int, ServiceCheckError))` and `Clock(now: fn() -> Timestamp, monotonic_ms: fn() -> Int)`.
+- `monitoring/checker.gleam` orchestrates a check through these ports. It captures `checked_at` from wall-clock time and measures successful request latency by subtracting monotonic readings.
+- `service_check.from_result()` converts the HTTP result into a `ServiceCheck`, classifying a received HTTP status against the Service's configured expected status. A transport failure becomes `Failure(reason)`, `Down`, and `latency_ms: None`.
+- `infrastructure/http/transport.gleam` performs real HTTP with `gleam/httpc`, mapping transport errors into domain-owned `ServiceCheckError` values. An HTTP error status such as 503 is still an `Ok(503)` transport result; the domain classifies it separately.
+- `infrastructure/clock/system.gleam` supplies `timestamp.system_time` for calendar time and a small Erlang FFI adapter (`src/pulsebeam_clock_ffi.erl`) around `erlang:monotonic_time(millisecond)` for elapsed time.
+- `monitoring/live.gleam` composes the concrete adapters. Callers use `live.run(service)` for real checks or inject fake ports into `checker.run` for deterministic tests.
+
+```text
+monitoring/live.run(service)
+  └── monitoring/checker.run(service, transport, clock)
+        ├── Clock.now()                   -> checked_at
+        ├── Clock.monotonic_ms()          -> start
+        ├── HttpTransport.get(url)        -> Result(Int, ServiceCheckError)
+        ├── Clock.monotonic_ms()          -> finish
+        └── service_check.from_result()   -> domain ServiceCheck
+
+Concrete adapters: infrastructure/http/transport + infrastructure/clock/system
+```
+
+The domain does not import `gleam/httpc`, HTTP request builders, or a system clock. HTTP error mapping stays at the infrastructure boundary; classification stays in the domain.
+
+Unit tests in `test/service_check_test.gleam` and `test/monitoring_checker_test.gleam` run without network access or actual elapsed time. Infrastructure tests use `test/support/pulsebeam_http_server_ffi.erl` to serve HTTP responses on loopback without internet access, plus a separate clock test. The real HTTP integration suite still assumes port `127.0.0.1:1` refuses connections in one failure test; making that condition fully controlled is a possible test-hardening follow-up.
+
 ## Architecture diagram
 
 See [Component Architecture](./diagrams/architecture.md).
@@ -144,8 +171,6 @@ See [Monitoring Check Sequence](./diagrams/monitoring-sequence.md) and [Main Flo
 
 ## Known technical debt entering Stage 4
 
-- HTTP transport and timing are currently invoked directly from `service_check.gleam`;
-- latency measurement currently uses system/wall-clock timestamps rather than a monotonic timer;
 - The original `CheckHistory` implementation remains in-memory; durable history is provided separately through `ServiceCheckRepository`;
 - Service and ServiceCheck adapters exist, but application-level repository composition and supervised pool lifecycle are not yet implemented;
 - integration tests currently create per-test PostgreSQL pools without explicit teardown (see [Persistence Architecture](./persistence.md#technical-debt-and-follow-up));

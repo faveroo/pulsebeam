@@ -38,13 +38,21 @@ Both experiences are planned; they are not available as web applications yet. Se
 
 The persistence layer is implemented, but application-level runtime wiring and automatic recovery after a restart are **not yet complete**.
 
+### Replaceable HTTP and clock infrastructure (v0.2 — implemented in #18)
+
+- `HttpTransport` and `Clock` ports decouple monitoring execution from concrete network and time APIs.
+- `monitoring/checker.run()` coordinates checks with injected dependencies; `monitoring/live.run()` composes the real adapters.
+- `service_check.from_result()` handles HTTP outcomes and UP/DOWN classification without accessing the network or system clock.
+- The real HTTP adapter uses `gleam/httpc` and translates errors into domain error variants.
+- `checked_at` uses calendar time; elapsed request latency uses a monotonic BEAM clock.
+- Unit tests use fake ports, while real HTTP integration tests use a local loopback test server rather than public internet services.
+
 ## What's next
 
 The remaining v0.2 work includes:
 
-- Separating HTTP transport and time measurement from monitoring/domain logic ([#18](https://github.com/faveroo/pulsebeam/issues/18)).
-- Using monotonic time for latency measurement.
 - Scheduling checks automatically and running independent monitors under BEAM supervision.
+- Composing the new monitoring adapters into the persistent, supervised runtime.
 - Connecting the monitoring runtime to the persisted repositories and recovering state after restarts.
 - Improving connection-pool lifecycle management and automated integration-test setup.
 
@@ -55,7 +63,7 @@ A public web UI, private user accounts, dashboards, alerts, and community intera
 | Layer | Technology |
 | --- | --- |
 | Language / runtime | Gleam / Erlang OTP (BEAM) |
-| HTTP checks | `gleam_http`, `gleam_httpc` |
+| HTTP checks | `gleam_http`, `gleam_httpc`, replaceable transport port |
 | Database | PostgreSQL 17 |
 | Database client | `pog` |
 | Tests | `gleeunit` and PostgreSQL integration tests |
@@ -139,11 +147,19 @@ src/pulsebeam/
 ├── service_check.gleam
 ├── check_history.gleam
 ├── uptime.gleam
+├── monitoring/
+│   ├── ports.gleam
+│   ├── checker.gleam
+│   └── live.gleam
 ├── repository/
 │   ├── persistence_error.gleam
 │   ├── service_repository.gleam
 │   └── service_check_repository.gleam
 └── infrastructure/
+    ├── clock/
+    │   └── system.gleam
+    ├── http/
+    │   └── transport.gleam
     └── postgres/
         ├── connection.gleam
         ├── service_repository.gleam
@@ -152,7 +168,7 @@ src/pulsebeam/
 
 Domain types do not depend on PostgreSQL or SQL. The PostgreSQL adapters translate between database rows and domain values and map storage failures into PulseBeam persistence errors.
 
-**Current limitation:** `service_check.gleam` still invokes the concrete HTTP client and wall clock directly. Refactoring those dependencies is the next architectural task.
+HTTP transport and clock access are now implemented in infrastructure adapters. The monitoring domain stays independent of both. Automatic scheduling, BEAM supervision, and restart recovery are not yet implemented.
 
 For design details, see [Architecture](docs/architecture.md), [Persistence Architecture](docs/persistence.md), and [ADR-0003](docs/adr/0003-postgresql-persistence.md).
 

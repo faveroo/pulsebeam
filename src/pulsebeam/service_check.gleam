@@ -1,7 +1,4 @@
-import gleam/http/request
-import gleam/httpc
-import gleam/option.{type Option, None, Some}
-import gleam/time/duration
+import gleam/option.{type Option, None}
 import gleam/time/timestamp
 import pulsebeam/service.{type ServiceId}
 
@@ -32,59 +29,32 @@ pub type ServiceCheck {
   )
 }
 
-pub fn check(service: service.Service) -> ServiceCheck {
-  let url = service.url(service)
-  let checked_at = timestamp.system_time()
-
-  case request.to(url) {
-    Error(_) ->
-      ServiceCheck(
-        service_id: service.id(service),
-        checked_at: checked_at,
-        latency_ms: None,
-        outcome: Failure(InvalidRequest),
-        status: Down,
-      )
-
-    Ok(req) -> {
-      let started_at = timestamp.system_time()
-      let response = httpc.send(req)
-      let finished_at = timestamp.system_time()
-
-      case response {
-        Error(error) ->
-          ServiceCheck(
-            service_id: service.id(service),
-            checked_at: checked_at,
-            latency_ms: None,
-            outcome: Failure(map_http_error(error)),
-            status: Down,
-          )
-
-        Ok(response) -> {
-          let latency =
-            timestamp.difference(started_at, finished_at)
-            |> duration.to_milliseconds
-            |> Some
-
-          let status = case
-            response.status == service.expected_status(service)
-          {
-            True -> Up
-            False -> Down
-          }
-
-          ServiceCheck(
-            service_id: service.id(service),
-            checked_at: checked_at,
-            latency_ms: latency,
-            outcome: HttpResponse(response.status),
-            status: status,
-          )
-        }
+pub fn from_result(
+  monitored_service: service.Service,
+  checked_at: timestamp.Timestamp,
+  http_result: Result(Int, ServiceCheckError),
+  latency_ms: Option(Int),
+) -> ServiceCheck {
+  let #(outcome, status, latency) = case http_result {
+    Ok(code) -> {
+      let status = case code == service.expected_status(monitored_service) {
+        True -> Up
+        False -> Down
       }
+
+      #(HttpResponse(code), status, latency_ms)
     }
+
+    Error(reason) -> #(Failure(reason), Down, None)
   }
+
+  ServiceCheck(
+    service_id: service.id(monitored_service),
+    checked_at: checked_at,
+    latency_ms: latency,
+    outcome: outcome,
+    status: status,
+  )
 }
 
 pub fn checked_at(service_check: ServiceCheck) -> timestamp.Timestamp {
@@ -105,12 +75,4 @@ pub fn outcome(service_check: ServiceCheck) -> ServiceCheckOutcome {
 
 pub fn service_id(service_check: ServiceCheck) -> ServiceId {
   service_check.service_id
-}
-
-fn map_http_error(error: httpc.HttpError) -> ServiceCheckError {
-  case error {
-    httpc.ResponseTimeout -> Timeout
-    httpc.FailedToConnect(_, _) -> ConnectionFailed
-    httpc.InvalidUtf8Response -> InvalidResponse
-  }
 }
