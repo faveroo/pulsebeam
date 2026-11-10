@@ -1,4 +1,8 @@
 import gleam/erlang/process
+import pog
+import pulsebeam/infrastructure/clock/system
+import pulsebeam/infrastructure/http/transport
+import pulsebeam/infrastructure/postgres/service_check_repository
 import pulsebeam/monitoring/check_consumer
 import pulsebeam/monitoring/check_persister
 import pulsebeam/monitoring/ports
@@ -49,4 +53,20 @@ pub fn start(
           }
       }
   }
+}
+
+pub fn start_live(
+  monitored_service: service.Service,
+  database: pog.Connection,
+  outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
+) -> Result(Runtime, Nil) {
+  let store = fn(check) { service_check_repository.store(database, check) }
+
+  start(monitored_service, transport.new(), system.new(), store, outcomes)
+}
+
+pub fn stop(runtime: Runtime) -> Nil {
+  scheduler.stop(runtime.scheduler_commands)
+  check_consumer.stop(runtime.consumer_commands)
+  check_persister.stop(runtime.persister_commands)
 }
