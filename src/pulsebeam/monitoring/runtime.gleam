@@ -19,6 +19,12 @@ pub opaque type Runtime {
   )
 }
 
+pub type ShutdownError {
+  SchedulerStopTimedOut
+  ConsumerStopTimedOut
+  PersisterStopTimedOut
+}
+
 pub fn start(
   monitored_service: service.Service,
   transport: ports.HttpTransport,
@@ -69,4 +75,21 @@ pub fn stop(runtime: Runtime) -> Nil {
   scheduler.stop(runtime.scheduler_commands)
   check_consumer.stop(runtime.consumer_commands)
   check_persister.stop(runtime.persister_commands)
+}
+
+pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
+  case scheduler.stop_and_wait(running.scheduler_commands) {
+    Error(_) -> Error(SchedulerStopTimedOut)
+
+    Ok(Nil) ->
+      case check_consumer.stop_and_wait(running.consumer_commands) {
+        Error(_) -> Error(ConsumerStopTimedOut)
+
+        Ok(Nil) ->
+          case check_persister.stop_and_wait(running.persister_commands) {
+            Error(_) -> Error(PersisterStopTimedOut)
+            Ok(Nil) -> Ok(Nil)
+          }
+      }
+  }
 }
