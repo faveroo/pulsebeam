@@ -6,6 +6,7 @@ import pulsebeam/service
 
 pub opaque type Command {
   Stop
+  StopAndWait(process.Subject(Nil))
   Tick
 }
 
@@ -58,6 +59,12 @@ fn loop(
       Nil
     }
 
+    StopAndWait(reply) -> {
+      let _ = process.cancel_timer(timer)
+      process.send(reply, Nil)
+      Nil
+    }
+
     Tick -> {
       process.send(notifications, service.id(monitored_service))
 
@@ -71,4 +78,12 @@ fn loop(
 
 pub fn stop(commands: process.Subject(Command)) -> Nil {
   process.send(commands, Stop)
+}
+
+pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
+  let reply = process.new_subject()
+
+  process.send(commands, StopAndWait(reply))
+
+  process.receive(reply, within: 1000)
 }

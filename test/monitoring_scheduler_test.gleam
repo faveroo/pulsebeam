@@ -75,3 +75,22 @@ pub fn scheduler_emits_periodic_checks_test() {
 
   scheduler.stop(commands)
 }
+
+pub fn scheduler_stops_after_acknowledgement_test() {
+  let assert Ok(monitored_service) =
+    service.new("Stop Test", "https://example.com", 200, 1, service.Private)
+
+  let notifications = process.new_subject()
+
+  let assert Ok(commands) = scheduler.start(monitored_service, notifications)
+
+  // Primeira verificação imediata.
+  let assert Ok(_) = process.receive(notifications, within: 1000)
+
+  // Solicita parada e aguarda confirmação.
+  assert scheduler.stop_and_wait(commands) == Ok(Nil)
+
+  // Depois da confirmação, não deve haver
+  // outro Tick no próximo intervalo.
+  assert process.receive(notifications, within: 1200) == Error(Nil)
+}
