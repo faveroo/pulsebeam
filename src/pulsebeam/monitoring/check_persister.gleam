@@ -4,11 +4,13 @@ import pulsebeam/service_check
 
 pub opaque type Command {
   Stop
+  StopAndWait(process.Subject(Nil))
 }
 
 type Message {
   Persist(service_check.ServiceCheck)
   Shutdown
+  ShutdownAndWait(process.Subject(Nil))
 }
 
 pub fn start(
@@ -44,10 +46,20 @@ fn loop(
   let selector =
     process.new_selector()
     |> process.select_map(checks, Persist)
-    |> process.select_map(commands, fn(_) { Shutdown })
+    |> process.select_map(commands, fn(command) {
+      case command {
+        Stop -> Shutdown
+        StopAndWait(reply) -> ShutdownAndWait(reply)
+      }
+    })
 
   case process.selector_receive_forever(selector) {
     Shutdown -> Nil
+
+    ShutdownAndWait(reply) -> {
+      process.send(reply, Nil)
+      Nil
+    }
 
     Persist(check) -> {
       let result = store(check)
@@ -61,4 +73,12 @@ fn loop(
 
 pub fn stop(commands: process.Subject(Command)) -> Nil {
   process.send(commands, Stop)
+}
+
+pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
+  let reply = process.new_subject()
+
+  process.send(commands, StopAndWait(reply))
+
+  process.receive(reply, within: 1000)
 }

@@ -84,3 +84,55 @@ pub fn persister_continues_after_storage_failure_test() {
 
   check_persister.stop(commands)
 }
+
+pub fn persister_finishes_queued_writes_before_stopping_test() {
+  let assert Ok(monitored_service) =
+    service.new(
+      "Graceful Shutdown Test",
+      "https://example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+
+  let first_check =
+    service_check.from_result(monitored_service, checked_at, Ok(200), Some(10))
+
+  let second_check =
+    service_check.from_result(monitored_service, checked_at, Ok(503), Some(20))
+
+  let saved = process.new_subject()
+  let outcomes = process.new_subject()
+
+  let store = fn(check) {
+    process.send(saved, check)
+    Ok(Nil)
+  }
+
+  let assert Ok(#(checks, commands)) = check_persister.start(store, outcomes)
+
+  // Duas gravações antes da solicitação de parada.
+  process.send(checks, first_check)
+  process.send(checks, second_check)
+
+  // Aguarda a confirmação do persister.
+  assert check_persister.stop_and_wait(commands) == Ok(Nil)
+
+  // Confirma que ambas foram processadas.
+  let assert Ok(saved_first) = process.receive(saved, within: 1000)
+
+  let assert Ok(saved_second) = process.receive(saved, within: 1000)
+
+  assert saved_first == first_check
+  assert saved_second == second_check
+
+  // Confirma que ambas as operações tiveram sucesso.
+  let assert Ok(first_result) = process.receive(outcomes, within: 1000)
+
+  let assert Ok(second_result) = process.receive(outcomes, within: 1000)
+
+  assert first_result == Ok(Nil)
+  assert second_result == Ok(Nil)
+}
