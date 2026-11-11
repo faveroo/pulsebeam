@@ -164,3 +164,60 @@ pub fn finished_check_allows_next_execution_test() {
   assert second_dispatch == True
   assert next_state == schedule.InFlight
 }
+
+pub fn persister_notifies_completion_after_success_and_failure_test() {
+  let assert Ok(monitored_service) =
+    service.new(
+      "Completion Test",
+      "https://example.com",
+      200,
+      60,
+      service.Private,
+    )
+
+  let checked_at = timestamp.from_unix_seconds(1_700_000_000)
+
+  let first_check =
+    service_check.from_result(monitored_service, checked_at, Ok(200), Some(10))
+
+  let second_check =
+    service_check.from_result(monitored_service, checked_at, Ok(503), Some(20))
+
+  let outcomes = process.new_subject()
+  let completions = process.new_subject()
+
+  let store = fn(check: service_check.ServiceCheck) {
+    case check.status {
+      service_check.Up -> Error(persistence_error.QueryFailed)
+
+      service_check.Down -> Ok(Nil)
+    }
+  }
+
+  let on_finished = fn(service_id) { process.send(completions, service_id) }
+
+  let assert Ok(#(checks, commands)) =
+    check_persister.start_with_completion(store, outcomes, on_finished)
+
+  // Primeira gravação: falha.
+  process.send(checks, first_check)
+
+  let assert Ok(first_result) = process.receive(outcomes, within: 1000)
+
+  let assert Ok(first_completion) = process.receive(completions, within: 1000)
+
+  assert first_result == Error(persistence_error.QueryFailed)
+  assert first_completion == service.id(monitored_service)
+
+  // Segunda gravação: sucesso.
+  process.send(checks, second_check)
+
+  let assert Ok(second_result) = process.receive(outcomes, within: 1000)
+
+  let assert Ok(second_completion) = process.receive(completions, within: 1000)
+
+  assert second_result == Ok(Nil)
+  assert second_completion == service.id(monitored_service)
+
+  assert check_persister.stop_and_wait(commands) == Ok(Nil)
+}

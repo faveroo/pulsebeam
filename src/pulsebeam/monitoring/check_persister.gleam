@@ -1,5 +1,6 @@
 import gleam/erlang/process
 import pulsebeam/repository/persistence_error
+import pulsebeam/service
 import pulsebeam/service_check
 
 pub opaque type Command {
@@ -21,6 +22,18 @@ pub fn start(
   #(process.Subject(service_check.ServiceCheck), process.Subject(Command)),
   Nil,
 ) {
+  start_with_completion(store, outcomes, fn(_) { Nil })
+}
+
+pub fn start_with_completion(
+  store: fn(service_check.ServiceCheck) ->
+    Result(Nil, persistence_error.PersistenceError),
+  outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
+  on_finished: fn(service.ServiceId) -> Nil,
+) -> Result(
+  #(process.Subject(service_check.ServiceCheck), process.Subject(Command)),
+  Nil,
+) {
   let started = process.new_subject()
 
   let _pid =
@@ -30,7 +43,7 @@ pub fn start(
 
       process.send(started, #(checks, commands))
 
-      loop(store, checks, commands, outcomes)
+      loop(store, checks, commands, outcomes, on_finished)
     })
 
   process.receive(started, within: 1000)
@@ -42,6 +55,7 @@ fn loop(
   checks: process.Subject(service_check.ServiceCheck),
   commands: process.Subject(Command),
   outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
+  on_finished: fn(service.ServiceId) -> Nil,
 ) -> Nil {
   let selector =
     process.new_selector()
@@ -64,9 +78,14 @@ fn loop(
     Persist(check) -> {
       let result = store(check)
 
+      // Informa o resultado da persistência.
       process.send(outcomes, result)
 
-      loop(store, checks, commands, outcomes)
+      // Notifica que a tentativa terminou,
+      // independentemente de sucesso ou erro.
+      on_finished(check.service_id)
+
+      loop(store, checks, commands, outcomes, on_finished)
     }
   }
 }
