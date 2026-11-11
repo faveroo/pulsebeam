@@ -1,0 +1,6 @@
+.git
+build
+.env
+.env.*
+erl_crash.dump
+*.beam

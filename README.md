@@ -71,6 +71,23 @@ A public web UI, private user accounts, dashboards, alerts, and community intera
 
 ## Getting started
 
+### Docker development environment
+
+With Docker Desktop running, start the Gleam/Erlang development container and
+PostgreSQL from the repository root (works in PowerShell and Unix shells):
+
+```sh
+docker compose up -d --build --wait
+docker compose exec dev gleam test
+docker compose exec dev sh
+```
+
+The source directory is mounted into `/workspace`, so local edits are immediately
+available inside the container. The first startup creates and migrates both
+`pulsebeam` and `pulsebeam_test`; tests use the dedicated test database automatically.
+See [Local Development](docs/development.md#docker-development-environment-recommended)
+for common commands and database lifecycle details.
+
 ### Requirements
 
 - Gleam 1.19 or newer
