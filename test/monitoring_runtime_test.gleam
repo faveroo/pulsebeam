@@ -3,6 +3,7 @@ import gleam/option.{Some}
 import gleam/time/timestamp
 import pulsebeam/monitoring/ports
 import pulsebeam/monitoring/runtime
+import pulsebeam/repository/persistence_error
 import pulsebeam/service
 import pulsebeam/service_check
 
@@ -87,4 +88,44 @@ pub fn runtime_finishes_pending_check_before_stopping_test() {
   let assert Ok(store_result) = process.receive(outcomes, within: 1000)
 
   assert store_result == Ok(Nil)
+}
+
+pub fn runtime_schedules_again_after_storage_failure_test() {
+  let assert Ok(monitored_service) =
+    service.new(
+      "Retry Scheduling Test",
+      "https://example.com",
+      200,
+      1,
+      service.Private,
+    )
+
+  let transport = ports.HttpTransport(get: fn(_) { Ok(200) })
+
+  let clock =
+    ports.Clock(
+      now: fn() { timestamp.from_unix_seconds(1_700_000_000) },
+      monotonic_ms: fn() { 1000 },
+    )
+
+  let outcomes = process.new_subject()
+
+  // Toda tentativa de gravação falha.
+  let store = fn(_) { Error(persistence_error.QueryFailed) }
+
+  let assert Ok(running) =
+    runtime.start(monitored_service, transport, clock, store, outcomes)
+
+  // Primeira verificação: imediata.
+  let assert Ok(first) = process.receive(outcomes, within: 1000)
+
+  assert first == Error(persistence_error.QueryFailed)
+
+  // Segunda verificação: próximo intervalo.
+  // O scheduler precisa ter recebido CheckFinished.
+  let assert Ok(second) = process.receive(outcomes, within: 2500)
+
+  assert second == Error(persistence_error.QueryFailed)
+
+  assert runtime.stop_and_wait(running) == Ok(Nil)
 }

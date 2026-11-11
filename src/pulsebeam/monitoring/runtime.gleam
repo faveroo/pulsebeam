@@ -5,6 +5,7 @@ import pulsebeam/infrastructure/http/transport
 import pulsebeam/infrastructure/postgres/service_check_repository
 import pulsebeam/monitoring/check_consumer
 import pulsebeam/monitoring/check_persister
+import pulsebeam/monitoring/completion_relay
 import pulsebeam/monitoring/ports
 import pulsebeam/monitoring/scheduler
 import pulsebeam/repository/persistence_error
@@ -16,6 +17,7 @@ pub opaque type Runtime {
     scheduler_commands: process.Subject(scheduler.Command),
     consumer_commands: process.Subject(check_consumer.Command),
     persister_commands: process.Subject(check_persister.Command),
+    relay: completion_relay.Relay,
   )
 }
 
@@ -23,6 +25,7 @@ pub type ShutdownError {
   SchedulerStopTimedOut
   ConsumerStopTimedOut
   PersisterStopTimedOut
+  RelayStopTimedOut
 }
 
 pub fn start(
@@ -33,31 +36,53 @@ pub fn start(
     Result(Nil, persistence_error.PersistenceError),
   outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
 ) -> Result(Runtime, Nil) {
-  case check_persister.start(store, outcomes) {
+  case completion_relay.start(service.id(monitored_service)) {
     Error(_) -> Error(Nil)
 
-    Ok(#(checks, persister_commands)) ->
-      case check_consumer.start(monitored_service, transport, clock, checks) {
+    Ok(relay) -> {
+      let on_finished = fn(service_id) {
+        completion_relay.finished(relay, service_id)
+      }
+
+      case check_persister.start_with_completion(store, outcomes, on_finished) {
         Error(_) -> {
-          check_persister.stop(persister_commands)
+          let _ = completion_relay.stop_and_wait(relay)
           Error(Nil)
         }
 
-        Ok(#(events, consumer_commands)) ->
-          case scheduler.start(monitored_service, events) {
+        Ok(#(checks, persister_commands)) ->
+          case
+            check_consumer.start(monitored_service, transport, clock, checks)
+          {
             Error(_) -> {
-              check_consumer.stop(consumer_commands)
-              check_persister.stop(persister_commands)
+              let _ = check_persister.stop_and_wait(persister_commands)
+              let _ = completion_relay.stop_and_wait(relay)
               Error(Nil)
             }
-            Ok(scheduler_commands) ->
-              Ok(Runtime(
-                scheduler_commands:,
-                consumer_commands:,
-                persister_commands:,
-              ))
+
+            Ok(#(events, consumer_commands)) ->
+              case scheduler.start_with_completion(monitored_service, events) {
+                Error(_) -> {
+                  let _ = check_consumer.stop_and_wait(consumer_commands)
+                  let _ = check_persister.stop_and_wait(persister_commands)
+                  let _ = completion_relay.stop_and_wait(relay)
+                  Error(Nil)
+                }
+
+                Ok(scheduler_commands) -> {
+                  completion_relay.bind(relay, scheduler_commands)
+
+                  Ok(Runtime(
+                    scheduler_commands:,
+                    consumer_commands:,
+                    persister_commands:,
+                    relay:,
+                  ))
+                }
+              }
           }
       }
+    }
   }
 }
 
@@ -71,10 +96,9 @@ pub fn start_live(
   start(monitored_service, transport.new(), system.new(), store, outcomes)
 }
 
-pub fn stop(runtime: Runtime) -> Nil {
-  scheduler.stop(runtime.scheduler_commands)
-  check_consumer.stop(runtime.consumer_commands)
-  check_persister.stop(runtime.persister_commands)
+pub fn stop(running: Runtime) -> Nil {
+  let _ = stop_and_wait(running)
+  Nil
 }
 
 pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
@@ -88,7 +112,12 @@ pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
         Ok(Nil) ->
           case check_persister.stop_and_wait(running.persister_commands) {
             Error(_) -> Error(PersisterStopTimedOut)
-            Ok(Nil) -> Ok(Nil)
+
+            Ok(Nil) ->
+              case completion_relay.stop_and_wait(running.relay) {
+                Error(_) -> Error(RelayStopTimedOut)
+                Ok(Nil) -> Ok(Nil)
+              }
           }
       }
   }
