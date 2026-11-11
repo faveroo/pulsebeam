@@ -8,11 +8,27 @@ pub opaque type Command {
   Stop
   StopAndWait(process.Subject(Nil))
   Tick
+  CheckFinished
 }
 
 pub fn start(
   monitored_service: service.Service,
   notifications: process.Subject(service.ServiceId),
+) -> Result(process.Subject(Command), Nil) {
+  start_with_mode(monitored_service, notifications, False)
+}
+
+pub fn start_with_completion(
+  monitored_service: service.Service,
+  notifications: process.Subject(service.ServiceId),
+) -> Result(process.Subject(Command), Nil) {
+  start_with_mode(monitored_service, notifications, True)
+}
+
+fn start_with_mode(
+  monitored_service: service.Service,
+  notifications: process.Subject(service.ServiceId),
+  require_completion: Bool,
 ) -> Result(process.Subject(Command), Nil) {
   let started = process.new_subject()
 
@@ -31,7 +47,20 @@ pub fn start(
       let next_due =
         schedule.next_due_ms(first_due, clock.monotonic_ms(), monitored_service)
 
-      loop(monitored_service, notifications, commands, clock, next_due)
+      let state = case require_completion {
+        True -> schedule.InFlight
+        False -> schedule.Idle
+      }
+
+      loop(
+        monitored_service,
+        notifications,
+        commands,
+        clock,
+        next_due,
+        state,
+        require_completion,
+      )
     })
 
   process.receive(started, within: 1000)
@@ -43,6 +72,8 @@ fn loop(
   commands: process.Subject(Command),
   clock: ports.Clock,
   next_due: Int,
+  state: schedule.CheckState,
+  require_completion: Bool,
 ) -> Nil {
   let now_ms = clock.monotonic_ms()
 
@@ -53,6 +84,28 @@ fn loop(
 
   let timer = process.send_after(commands, delay_ms, Tick)
 
+  wait_for_tick(
+    monitored_service,
+    notifications,
+    commands,
+    clock,
+    next_due,
+    state,
+    require_completion,
+    timer,
+  )
+}
+
+fn wait_for_tick(
+  monitored_service: service.Service,
+  notifications: process.Subject(service.ServiceId),
+  commands: process.Subject(Command),
+  clock: ports.Clock,
+  next_due: Int,
+  state: schedule.CheckState,
+  require_completion: Bool,
+  timer: process.Timer,
+) -> Nil {
   case process.receive_forever(commands) {
     Stop -> {
       let _ = process.cancel_timer(timer)
@@ -65,15 +118,55 @@ fn loop(
       Nil
     }
 
+    CheckFinished -> {
+      let new_state = case require_completion {
+        True -> schedule.on_check_finished(state)
+        False -> state
+      }
+
+      // Mantém o mesmo timer enquanto
+      // atualiza apenas o estado.
+      wait_for_tick(
+        monitored_service,
+        notifications,
+        commands,
+        clock,
+        next_due,
+        new_state,
+        require_completion,
+        timer,
+      )
+    }
+
     Tick -> {
-      process.send(notifications, service.id(monitored_service))
+      let #(new_state, should_dispatch) = case require_completion {
+        True -> schedule.on_tick(state)
+        False -> #(state, True)
+      }
+
+      case should_dispatch {
+        True -> process.send(notifications, service.id(monitored_service))
+        False -> Nil
+      }
 
       let next =
         schedule.next_due_ms(next_due, clock.monotonic_ms(), monitored_service)
 
-      loop(monitored_service, notifications, commands, clock, next)
+      loop(
+        monitored_service,
+        notifications,
+        commands,
+        clock,
+        next,
+        new_state,
+        require_completion,
+      )
     }
   }
+}
+
+pub fn check_finished(commands: process.Subject(Command)) -> Nil {
+  process.send(commands, CheckFinished)
 }
 
 pub fn stop(commands: process.Subject(Command)) -> Nil {

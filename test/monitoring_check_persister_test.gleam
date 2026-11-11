@@ -2,6 +2,7 @@ import gleam/erlang/process
 import gleam/option.{Some}
 import gleam/time/timestamp
 import pulsebeam/monitoring/check_persister
+import pulsebeam/monitoring/schedule
 import pulsebeam/repository/persistence_error
 import pulsebeam/service
 import pulsebeam/service_check
@@ -135,4 +136,31 @@ pub fn persister_finishes_queued_writes_before_stopping_test() {
 
   assert first_result == Ok(Nil)
   assert second_result == Ok(Nil)
+}
+
+pub fn idle_scheduler_allows_check_test() {
+  let #(state, should_dispatch) = schedule.on_tick(schedule.Idle)
+
+  assert should_dispatch == True
+  assert state == schedule.InFlight
+}
+
+pub fn busy_scheduler_skips_check_test() {
+  let #(state, should_dispatch) = schedule.on_tick(schedule.InFlight)
+
+  assert should_dispatch == False
+  assert state == schedule.InFlight
+}
+
+pub fn finished_check_allows_next_execution_test() {
+  let #(running, first_dispatch) = schedule.on_tick(schedule.Idle)
+
+  assert first_dispatch == True
+
+  let ready = schedule.on_check_finished(running)
+
+  let #(next_state, second_dispatch) = schedule.on_tick(ready)
+
+  assert second_dispatch == True
+  assert next_state == schedule.InFlight
 }

@@ -1,5 +1,21 @@
 import pulsebeam/service
 
+pub type CheckState {
+  Idle
+  InFlight
+}
+
+pub fn on_tick(state: CheckState) -> #(CheckState, Bool) {
+  case state {
+    Idle -> #(InFlight, True)
+    InFlight -> #(InFlight, False)
+  }
+}
+
+pub fn on_check_finished(_state: CheckState) -> CheckState {
+  Idle
+}
+
 pub fn first_due_ms(now_ms: Int) -> Int {
   now_ms
 }

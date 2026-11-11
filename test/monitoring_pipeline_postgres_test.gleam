@@ -1,4 +1,5 @@
 import gleam/erlang/process
+import gleam/list
 import gleam/option.{Some}
 import gleam/time/timestamp
 import pog
@@ -7,6 +8,7 @@ import pulsebeam/infrastructure/postgres/service_repository
 import pulsebeam/monitoring/check_consumer
 import pulsebeam/monitoring/check_persister
 import pulsebeam/monitoring/ports
+import pulsebeam/monitoring/runtime
 import pulsebeam/monitoring/scheduler
 import pulsebeam/service
 import pulsebeam/service_check
@@ -72,6 +74,74 @@ pub fn scheduled_check_is_persisted_in_postgres_test() {
   check_persister.stop(persister_commands)
 
   // Limpeza dos registros criados pelo teste.
+  let service_id =
+    service.id(monitored_service)
+    |> service.service_id_to_string
+
+  let assert Ok(_) =
+    pog.query("DELETE FROM service_checks WHERE service_id = $1::uuid")
+    |> pog.parameter(pog.text(service_id))
+    |> pog.execute(database)
+
+  let assert Ok(_) =
+    pog.query("DELETE FROM services WHERE id = $1::uuid")
+    |> pog.parameter(pog.text(service_id))
+    |> pog.execute(database)
+}
+
+pub fn periodic_checks_are_persisted_test() {
+  let database = test_postgres.database()
+
+  let assert Ok(monitored_service) =
+    service.new(
+      "Periodic Persistence Test",
+      "https://example.com",
+      200,
+      1,
+      service.Private,
+    )
+
+  let assert Ok(Nil) = service_repository.insert(database, monitored_service)
+
+  // Evita HTTP real, mas mantém o PostgreSQL real.
+  let transport = ports.HttpTransport(get: fn(_) { Ok(200) })
+
+  let clock =
+    ports.Clock(
+      now: fn() { timestamp.from_unix_seconds(1_700_000_000) },
+      monotonic_ms: fn() { 1000 },
+    )
+
+  let outcomes = process.new_subject()
+
+  let store = fn(check) { service_check_repository.store(database, check) }
+
+  let assert Ok(running) =
+    runtime.start(monitored_service, transport, clock, store, outcomes)
+
+  // Primeira verificação: imediata.
+  let assert Ok(Ok(Nil)) = process.receive(outcomes, within: 3000)
+
+  // Segunda verificação: após o intervalo de 1 segundo.
+  let assert Ok(Ok(Nil)) = process.receive(outcomes, within: 3000)
+
+  // Encerra os processos na ordem correta.
+  assert runtime.stop_and_wait(running) == Ok(Nil)
+
+  let assert Ok(checks) =
+    service_check_repository.for_service(
+      database,
+      service.id(monitored_service),
+    )
+
+  assert list.length(checks) >= 2
+
+  assert list.all(checks, fn(check) {
+    check.status == service_check.Up
+    && check.outcome == service_check.HttpResponse(200)
+  })
+
+  // Remove os dados criados pelo teste.
   let service_id =
     service.id(monitored_service)
     |> service.service_id_to_string
