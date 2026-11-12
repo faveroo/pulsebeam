@@ -7,6 +7,7 @@ import pulsebeam/service
 pub opaque type Command {
   Stop
   StopAndWait(process.Subject(Nil))
+  StopAndDrain(process.Subject(Nil), fn(process.Subject(Nil)) -> Nil)
   Tick
   CheckFinished
 }
@@ -118,6 +119,13 @@ fn wait_for_tick(
       Nil
     }
 
+    StopAndDrain(reply, notify_downstream) -> {
+      let _ = process.cancel_timer(timer)
+      // Sent from the scheduler process: ordered after all check requests.
+      notify_downstream(reply)
+      Nil
+    }
+
     CheckFinished -> {
       let new_state = case require_completion {
         True -> schedule.on_check_finished(state)
@@ -179,4 +187,15 @@ pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
   process.send(commands, StopAndWait(reply))
 
   process.receive(reply, within: 1000)
+}
+
+// Waits until the consumer acknowledges a barrier sent by this scheduler.
+// The barrier is ordered behind all previously dispatched check requests.
+pub fn stop_and_drain(
+  commands: process.Subject(Command),
+  notify_downstream: fn(process.Subject(Nil)) -> Nil,
+) -> Result(Nil, Nil) {
+  let reply = process.new_subject()
+  process.send(commands, StopAndDrain(reply, notify_downstream))
+  process.receive(reply, within: 30_000)
 }
