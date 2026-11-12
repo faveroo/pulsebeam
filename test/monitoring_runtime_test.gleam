@@ -303,3 +303,61 @@ pub fn slow_service_does_not_block_another_service_test() {
 
   assert runtime.stop_and_wait(slow_runtime) == Ok(Nil)
 }
+
+pub fn runtime_stop_waits_for_http_and_storage_to_finish_test() {
+  let assert Ok(monitored_service) =
+    service.new("Drain Test", "https://example.com", 200, 60, service.Private)
+
+  let http_started = process.new_subject()
+  let storage_started = process.new_subject()
+  let outcomes = process.new_subject()
+  let stopped = process.new_subject()
+
+  let transport = ports.HttpTransport(get: fn(_) {
+    let release = process.new_subject()
+    process.send(http_started, release)
+
+    case process.receive(release, within: 5_000) {
+      Ok(Nil) -> Ok(200)
+      Error(Nil) -> Ok(503)
+    }
+  })
+
+  let clock = ports.Clock(
+    now: fn() { timestamp.from_unix_seconds(1_700_000_000) },
+    monotonic_ms: fn() { 1000 },
+  )
+
+  let store = fn(_) {
+    let release = process.new_subject()
+    process.send(storage_started, release)
+    let assert Ok(Nil) = process.receive(release, within: 5_000)
+    Ok(Nil)
+  }
+
+  let assert Ok(running) =
+    runtime.start(monitored_service, transport, clock, store, outcomes)
+
+  let assert Ok(release_http) =
+    process.receive(http_started, within: 1_000)
+
+  // Stop runs concurrently with the blocked consumer.
+  let _pid = process.spawn_unlinked(fn() {
+    process.send(stopped, runtime.stop_and_wait(running))
+  })
+
+  assert process.receive(stopped, within: 100) == Error(Nil)
+
+  process.send(release_http, Nil)
+
+  // Even after the HTTP response, stop must wait for PostgreSQL persistence.
+  let assert Ok(release_storage) =
+    process.receive(storage_started, within: 1_000)
+
+  assert process.receive(stopped, within: 100) == Error(Nil)
+
+  process.send(release_storage, Nil)
+
+  let assert Ok(Ok(Nil)) = process.receive(outcomes, within: 1_000)
+  assert process.receive(stopped, within: 3_000) == Ok(Ok(Nil))
+}
