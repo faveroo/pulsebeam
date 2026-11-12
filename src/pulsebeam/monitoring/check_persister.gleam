@@ -6,12 +6,14 @@ import pulsebeam/service_check
 pub opaque type Command {
   Stop
   StopAndWait(process.Subject(Nil))
+  Drain(process.Subject(Nil))
 }
 
 type Message {
   Persist(service_check.ServiceCheck)
   Shutdown
   ShutdownAndWait(process.Subject(Nil))
+  Drained(process.Subject(Nil))
 }
 
 pub fn start(
@@ -64,6 +66,7 @@ fn loop(
       case command {
         Stop -> Shutdown
         StopAndWait(reply) -> ShutdownAndWait(reply)
+        Drain(reply) -> Drained(reply)
       }
     })
 
@@ -73,6 +76,11 @@ fn loop(
     ShutdownAndWait(reply) -> {
       process.send(reply, Nil)
       Nil
+    }
+
+    Drained(reply) -> {
+      process.send(reply, Nil)
+      loop(store, checks, commands, outcomes, on_finished)
     }
 
     Persist(check) -> {
@@ -100,4 +108,9 @@ pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
   process.send(commands, StopAndWait(reply))
 
   process.receive(reply, within: 1000)
+}
+
+// Used by the consumer as a message barrier after it has emitted its checks.
+pub fn drain(commands: process.Subject(Command), reply: process.Subject(Nil)) -> Nil {
+  process.send(commands, Drain(reply))
 }
