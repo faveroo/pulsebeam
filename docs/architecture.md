@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Stage 3 Monitoring Core completed. Stage 4 PostgreSQL persistence implemented through Issues #16 and #17. Issue #18 adds replaceable HTTP/clock boundaries and monotonic latency timing; runtime scheduling, supervision, and restart recovery remain pending. This document defines responsibility boundaries, not a frozen folder structure.
+> Status: Stage 3 Monitoring Core complete. Stage 4 PostgreSQL persistence (#16/#17), HTTP/clock ports (#18), and automatic BEAM scheduling/startup (#19) are implemented. Process exit monitoring is present, but OTP supervision, automatic restarts, and dynamic service state management remain pending. This document defines responsibility boundaries, not a frozen folder structure.
 
 ## Architectural direction
 
@@ -169,12 +169,56 @@ See [Monitoring Check Sequence](./diagrams/monitoring-sequence.md) and [Main Flo
 - [ADR-0002 — Keep monitoring checks separate from incidents](./adr/0002-separate-checks-from-incidents.md)
 - [ADR-0003 — Use PostgreSQL behind repository contracts](./adr/0003-postgresql-persistence.md)
 
+## Stage 4 monitoring runtime (Issue #19)
+
+`pulsebeam.main()` opens a PostgreSQL pool and uses `monitoring/bootstrap.gleam`
+to load enabled persisted Services and start one runtime per Service.
+
+```text
+main (outcome receiver and BEAM process exit monitors)
+  |
+  +-- bootstrap -> ServiceRepository.list -> enabled Services
+  |
+  +-- per-service Runtime
+        Scheduler (interval_seconds, immediate first tick, InFlight)
+           | ServiceId
+           v
+        Check Consumer (HTTP / wall and monotonic clock)
+           | ServiceCheck
+           v
+        Check Persister (PostgreSQL ServiceCheckRepository.store)
+           | completion on Ok or Error
+           v
+        Completion Relay -> Scheduler CheckFinished
+```
+
+Each runtime owns its own processes, so a slow HTTP request or persistence
+operation in one Service does not block other Services. While a check is
+`InFlight`, its scheduler skips ticks rather than building a queue.
+The scheduler resumes only after persistence attempts complete.
+
+For normal shutdown the runtime sends an ordered **drain barrier** from the
+scheduler process to the consumer, then from the consumer to the persister.
+The barriers are sent by the same processes that emitted the original work,
+so the receiving process can acknowledge them after processing prior requests.
+This avoids racing a parent's shutdown command against an earlier check
+message from a different sender. `Runtime.stop_and_wait` is synchronous and
+returns timeout errors; `Runtime.stop` retains its Nil API and discards them.
+
+On startup the main process monitors each runtime component with BEAM
+process monitors; it logs unexpected exits and continues processing outcomes
+from other Services. **This is failure detection, not supervision**.
+There is no automatic component restart, check timeout recovery if a component
+crashes before sending completion, or application-wide Ctrl+C graceful shutdown
+yet. A new application run reloads persisted enabled Services, but live
+enable/disable changes are not propagated automatically.
+
 ## Known technical debt entering Stage 4
 
 - The original `CheckHistory` implementation remains in-memory; durable history is provided separately through `ServiceCheckRepository`;
-- Service and ServiceCheck adapters exist, but application-level repository composition and supervised pool lifecycle are not yet implemented;
+- Service and ServiceCheck adapters are composed by the bootstrap/runtime; supervised PostgreSQL pool lifecycle is still pending;
 - integration tests currently create per-test PostgreSQL pools without explicit teardown (see [Persistence Architecture](./persistence.md#technical-debt-and-follow-up));
-- no scheduler, supervision topology, or restart recovery is implemented yet;
+- scheduler and process-exit detection exist, but no OTP supervision/restart topology or complete crash/restart recovery has been implemented;
 - private-history authorization remains outside the current core.
 
 See [Stage 3 Review](./stage-3-review.md) for the full Stage 3 review and [Persistence Architecture](./persistence.md) for the Stage 4 persistence boundary.
@@ -185,7 +229,7 @@ See [Stage 3 Review](./stage-3-review.md) for the full Stage 3 review and [Persi
 - ServiceCheck retention/cleanup policy until storage growth and product requirements justify a policy;
 - web framework;
 - frontend technology;
-- exact scheduler/process supervision topology until Stage 4 implementation validates the design;
+- automatic restart/supervision policy for failed runtime processes and application-wide graceful termination;
 - exact Health Score formula;
 - incident failure/recovery thresholds;
 - notification providers.

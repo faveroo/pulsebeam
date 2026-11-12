@@ -4,7 +4,7 @@ PulseBeam is an open-source project in progress, built with **Gleam** and the **
 
 The project follows an incremental software engineering approach, with documented requirements, architecture, implementation, tests, and technical decisions.
 
-> **Project status:** Stage 4 / v0.2 — **Persistent Monitoring (in progress)**. PulseBeam currently provides a monitoring core and PostgreSQL repository adapters; it is **not yet a continuously running monitoring platform or web application**.
+> **Project status:** Stage 4 / v0.2 — **Persistent Monitoring (in progress)**. PulseBeam can run continuous, scheduled HTTP checks with PostgreSQL history, but process restart supervision, dynamic enable/disable and a web application are not implemented yet.
 
 ## Product vision
 
@@ -36,7 +36,7 @@ Both experiences are planned; they are not available as web applications yet. Se
 - SQL migrations for `services` and `service_checks`, including constraints and a history index.
 - Domain and PostgreSQL integration tests, with transaction rollbacks for database isolation.
 
-The persistence layer is implemented, but application-level runtime wiring and automatic recovery after a restart are **not yet complete**.
+The persistence layer and startup wiring are implemented. On `gleam run`, persisted enabled services are reloaded and their monitoring processes are started. Full restart/recovery semantics and supervision remain future work.
 
 ### Replaceable HTTP and clock infrastructure (v0.2 — implemented in #18)
 
@@ -47,13 +47,23 @@ The persistence layer is implemented, but application-level runtime wiring and a
 - `checked_at` uses calendar time; elapsed request latency uses a monotonic BEAM clock.
 - Unit tests use fake ports, while real HTTP integration tests use a local loopback test server rather than public internet services.
 
+### Automatic monitoring runtime (v0.2 — implemented in #19)
+
+- On startup, `pulsebeam.main()` loads stored Services and schedules enabled ones; the first check fires immediately.
+- Each service runs an independent scheduler, HTTP checker, persister and completion relay using Gleam/BEAM processes.
+- The scheduler honors `interval_seconds` and skips ticks while a previous check is still awaiting persistence, so slow checks do not build an unbounded per-service queue.
+- The pipeline writes results to PostgreSQL, and the application receives persistence outcomes.
+- Graceful runtime shutdown uses ordered downstream barriers from scheduler to consumer to persister, allowing in-flight work to finish before shutdown.
+- The application monitors component process exits and logs an alert on unexpected termination. **Detection is not automatic restart**: a crashed component can interrupt that service until the application is restarted.
+- The running application reads the enabled state at startup; applying later changes dynamically and robust recovery are still planned.
+
 ## What's next
 
 The remaining v0.2 work includes:
 
-- Scheduling checks automatically and running independent monitors under BEAM supervision.
-- Composing the new monitoring adapters into the persistent, supervised runtime.
-- Connecting the monitoring runtime to the persisted repositories and recovering state after restarts.
+- Supervising/restarting failed monitoring processes and handling recovery of incomplete checks.
+- Applying service enable/disable changes to already-running monitors.
+- Strengthening restart recovery, isolated integration tests and graceful application-level termination.
 - Improving connection-pool lifecycle management and automated integration-test setup.
 
 A public web UI, private user accounts, dashboards, alerts, and community interactions belong to later milestones.
@@ -70,6 +80,23 @@ A public web UI, private user accounts, dashboards, alerts, and community intera
 | Development environment | GitHub Codespaces / Docker |
 
 ## Getting started
+
+### Docker development environment
+
+With Docker Desktop running, start the Gleam/Erlang development container and
+PostgreSQL from the repository root (works in PowerShell and Unix shells):
+
+```sh
+docker compose up -d --build --wait
+docker compose exec -e PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable" dev gleam test
+docker compose exec dev sh
+```
+
+The source directory is mounted into `/workspace`, so local edits are immediately
+available inside the container. The first startup creates and migrates both
+`pulsebeam` and `pulsebeam_test`; tests use the dedicated test database automatically.
+See [Local Development](docs/development.md#docker-development-environment-recommended)
+for common commands and database lifecycle details.
 
 ### Requirements
 
@@ -150,7 +177,14 @@ src/pulsebeam/
 ├── monitoring/
 │   ├── ports.gleam
 │   ├── checker.gleam
-│   └── live.gleam
+│   ├── live.gleam
+│   ├── schedule.gleam
+│   ├── scheduler.gleam
+│   ├── check_consumer.gleam
+│   ├── check_persister.gleam
+│   ├── completion_relay.gleam
+│   ├── runtime.gleam
+│   └── bootstrap.gleam
 ├── repository/
 │   ├── persistence_error.gleam
 │   ├── service_repository.gleam
@@ -168,7 +202,7 @@ src/pulsebeam/
 
 Domain types do not depend on PostgreSQL or SQL. The PostgreSQL adapters translate between database rows and domain values and map storage failures into PulseBeam persistence errors.
 
-HTTP transport and clock access are now implemented in infrastructure adapters. The monitoring domain stays independent of both. Automatic scheduling, BEAM supervision, and restart recovery are not yet implemented.
+HTTP transport and clock access are implemented in infrastructure adapters. Automatic scheduling, enabled-service startup and ordered pipeline drain are implemented in the monitoring modules. Process exit detection is implemented, but automatic supervision/restarts and complete crash/restart recovery are not.
 
 For design details, see [Architecture](docs/architecture.md), [Persistence Architecture](docs/persistence.md), and [ADR-0003](docs/adr/0003-postgresql-persistence.md).
 

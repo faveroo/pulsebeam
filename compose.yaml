@@ -1,0 +1,44 @@
+name: pulsebeam
+
+services:
+  dev:
+    build:
+      context: .
+      target: development
+    init: true
+    working_dir: /workspace
+    environment:
+      # 'gleam run' is a real monitor: use development data by default.
+      # For 'gleam test', override this URL with pulsebeam_test (see docs).
+      PULSEBEAM_DATABASE_URL: postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam?sslmode=disable
+    volumes:
+      - .:/workspace
+      # Keep Linux compilation artifacts separate from the host's build directory.
+      - gleam_build:/workspace/build
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pulsebeam
+      POSTGRES_PASSWORD: pulsebeam
+      POSTGRES_DB: pulsebeam
+    ports:
+      - "127.0.0.1:${PULSEBEAM_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/migrations:ro
+      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    healthcheck:
+      # TCP is available only after the image's initialization scripts finish.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U pulsebeam -d pulsebeam_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  gleam_build:
+  postgres_data:
