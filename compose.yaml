@@ -8,8 +8,9 @@ services:
     init: true
     working_dir: /workspace
     environment:
-      # The current suite reads this variable; always use the dedicated test DB.
-      PULSEBEAM_DATABASE_URL: postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable
+      # 'gleam run' is a real monitor: use development data by default.
+      # For 'gleam test', override this URL with pulsebeam_test (see docs).
+      PULSEBEAM_DATABASE_URL: postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam?sslmode=disable
     volumes:
       - .:/workspace
       # Keep Linux compilation artifacts separate from the host's build directory.
