@@ -86,3 +86,8 @@ pub fn stop_and_wait(relay: Relay) -> Result(Nil, Nil) {
 
   process.receive(reply, within: 1000)
 }
+
+// Allows the application to monitor unexpected relay termination.
+pub fn owner_pid(relay: Relay) -> Result(process.Pid, Nil) {
+  process.subject_owner(relay.messages)
+}
