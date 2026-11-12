@@ -47,7 +47,7 @@ The persistence layer and startup wiring are implemented. On `gleam run`, persis
 - `checked_at` uses calendar time; elapsed request latency uses a monotonic BEAM clock.
 - Unit tests use fake ports, while real HTTP integration tests use a local loopback test server rather than public internet services.
 
-### Automatic monitoring runtime (v0.2 — implemented in #19)
+### Automatic monitoring runtime (v0.2 — implemented in #19, merged via PR #30)
 
 - On startup, `pulsebeam.main()` loads stored Services and schedules enabled ones; the first check fires immediately.
 - Each service runs an independent scheduler, HTTP checker, persister and completion relay using Gleam/BEAM processes.
@@ -88,15 +88,37 @@ PostgreSQL from the repository root (works in PowerShell and Unix shells):
 
 ```sh
 docker compose up -d --build --wait
-docker compose exec -e PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable" dev gleam test
-docker compose exec dev sh
 ```
 
-The source directory is mounted into `/workspace`, so local edits are immediately
-available inside the container. The first startup creates and migrates both
-`pulsebeam` and `pulsebeam_test`; tests use the dedicated test database automatically.
+Run the application to start **continuous monitoring** of enabled Services from
+the development database (`pulsebeam`):
+
+```sh
+docker compose exec dev gleam run
+```
+
+The first check runs immediately. Further checks follow each Service's
+`interval_seconds`. The application keeps running and reports persistence
+outcomes. Press Ctrl+C to end this interactive session.
+
+Run the test suite **separately**, explicitly selecting the test database
+(`pulsebeam_test`) so test data never mixes with development monitoring:
+
+```sh
+docker compose exec -e PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable" dev gleam test
+```
+
+To open a shell in the development container, use `docker compose exec dev sh`.
+The source directory is mounted at `/workspace`, so edits are visible without
+rebuilding the container. On first startup, both `pulsebeam` and
+`pulsebeam_test` are created and migrated.
+
+**Current limitation:** BEAM process failures are logged but not automatically
+restarted. Dynamic changes to a Service's enabled state require a new runtime
+startup, and Ctrl+C does not perform an application-wide graceful shutdown.
+
 See [Local Development](docs/development.md#docker-development-environment-recommended)
-for common commands and database lifecycle details.
+for detailed setup, migration and database lifecycle instructions.
 
 ### Requirements
 
@@ -160,7 +182,16 @@ gleam format --check
 gleam test
 ```
 
-**Important:** the sample credentials are for local development only. Do not use them in production, and do not point integration tests at a development or production database.
+To start the application from the host (for example, in Codespaces), target
+the development database instead:
+
+```bash
+PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@127.0.0.1:5432/pulsebeam?sslmode=disable" gleam run
+```
+
+**Important:** these credentials are only for local development. Never point
+integration tests at a development or production database. Ensure both databases
+have the required migrations applied before running the commands.
 
 For setup details, troubleshooting, and current limitations, see [Local Development](docs/development.md).
 
