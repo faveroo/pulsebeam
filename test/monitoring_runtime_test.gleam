@@ -1,4 +1,5 @@
 import gleam/erlang/process
+import gleam/list
 import gleam/option.{Some}
 import gleam/time/timestamp
 import pulsebeam/monitoring/ports
@@ -360,4 +361,38 @@ pub fn runtime_stop_waits_for_http_and_storage_to_finish_test() {
 
   let assert Ok(Ok(Nil)) = process.receive(outcomes, within: 1_000)
   assert process.receive(stopped, within: 3_000) == Ok(Ok(Nil))
+}
+
+pub fn runtime_process_ids_can_be_monitored_test() {
+  let assert Ok(monitored_service) =
+    service.new("Monitor Test", "https://example.com", 200, 60, service.Private)
+
+  let transport = ports.HttpTransport(get: fn(_) { Ok(200) })
+  let clock = ports.Clock(
+    now: fn() { timestamp.from_unix_seconds(1_700_000_000) },
+    monotonic_ms: fn() { 1000 },
+  )
+  let outcomes = process.new_subject()
+  let store = fn(_) { Ok(Nil) }
+
+  let assert Ok(running) =
+    runtime.start(monitored_service, transport, clock, store, outcomes)
+
+  assert runtime.service_id(running) == service.id(monitored_service)
+
+  let assert Ok(pids) = runtime.process_ids(running)
+  assert list.length(pids) == 4
+  assert list.all(pids, process.is_alive)
+
+  let assert [first, ..] = pids
+  let monitor = process.monitor(first)
+
+  assert runtime.stop_and_wait(running) == Ok(Nil)
+
+  let selector =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+
+  let assert Ok(process.ProcessDown(_, _, _)) =
+    process.selector_receive(selector, within: 1_000)
 }
