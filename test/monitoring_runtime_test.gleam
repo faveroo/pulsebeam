@@ -201,3 +201,32 @@ pub fn runtime_does_not_accumulate_checks_during_slow_storage_test() {
 
   assert runtime.stop_and_wait(running) == Ok(Nil)
 }
+
+pub fn runtime_does_not_start_disabled_service_test() {
+  let assert Ok(monitored_service) =
+    service.new(
+      "Disabled Runtime Test",
+      "https://example.com",
+      200,
+      1,
+      service.Private,
+    )
+
+  let disabled_service = service.disable(monitored_service)
+
+  assert service.is_enabled(disabled_service) == False
+
+  let transport = ports.HttpTransport(get: fn(_) { Ok(200) })
+
+  let clock =
+    ports.Clock(
+      now: fn() { timestamp.from_unix_seconds(1_700_000_000) },
+      monotonic_ms: fn() { 1000 },
+    )
+
+  let outcomes = process.new_subject()
+  let store = fn(_) { Ok(Nil) }
+
+  let assert Error(Nil) =
+    runtime.start(disabled_service, transport, clock, store, outcomes)
+}

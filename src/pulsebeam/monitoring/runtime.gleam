@@ -36,6 +36,21 @@ pub fn start(
     Result(Nil, persistence_error.PersistenceError),
   outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
 ) -> Result(Runtime, Nil) {
+  case service.is_enabled(monitored_service) {
+    False -> Error(Nil)
+
+    True -> start_enabled(monitored_service, transport, clock, store, outcomes)
+  }
+}
+
+pub fn start_enabled(
+  monitored_service: service.Service,
+  transport: ports.HttpTransport,
+  clock: ports.Clock,
+  store: fn(service_check.ServiceCheck) ->
+    Result(Nil, persistence_error.PersistenceError),
+  outcomes: process.Subject(Result(Nil, persistence_error.PersistenceError)),
+) -> Result(Runtime, Nil) {
   case completion_relay.start(service.id(monitored_service)) {
     Error(_) -> Error(Nil)
 
