@@ -109,7 +109,10 @@ pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
 
 // Called by the scheduler process so the acknowledgement is ordered after
 // every preceding CheckRequested sent by that same scheduler.
-pub fn drain(commands: process.Subject(Command), reply: process.Subject(Nil)) -> Nil {
+pub fn drain(
+  commands: process.Subject(Command),
+  reply: process.Subject(Nil),
+) -> Nil {
   process.send(commands, Drain(reply))
 }
 

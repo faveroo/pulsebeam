@@ -134,10 +134,12 @@ pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
         check_persister.drain(running.persister_commands, reply)
       }
 
-      case check_consumer.stop_and_drain(
-        running.consumer_commands,
-        persister_barrier,
-      ) {
+      case
+        check_consumer.stop_and_drain(
+          running.consumer_commands,
+          persister_barrier,
+        )
+      {
         Error(_) -> Error(ConsumerStopTimedOut)
 
         Ok(Nil) ->
@@ -158,9 +160,15 @@ pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
 // Process IDs are used by the application to monitor abnormal or unexpected
 // termination. Monitoring alone does not restart a failed component.
 pub fn process_ids(running: Runtime) -> Result(List(process.Pid), Nil) {
-  use scheduler_pid <- result.try(process.subject_owner(running.scheduler_commands))
-  use consumer_pid <- result.try(process.subject_owner(running.consumer_commands))
-  use persister_pid <- result.try(process.subject_owner(running.persister_commands))
+  use scheduler_pid <- result.try(process.subject_owner(
+    running.scheduler_commands,
+  ))
+  use consumer_pid <- result.try(process.subject_owner(
+    running.consumer_commands,
+  ))
+  use persister_pid <- result.try(process.subject_owner(
+    running.persister_commands,
+  ))
   use relay_pid <- result.try(completion_relay.owner_pid(running.relay))
   Ok([scheduler_pid, consumer_pid, persister_pid, relay_pid])
 }

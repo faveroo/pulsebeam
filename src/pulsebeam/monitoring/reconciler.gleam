@@ -18,7 +18,5 @@ pub fn plan(
     !service.is_enabled(monitored_service)
     && list.contains(active_service_ids, service.id(monitored_service))
   })
-  |> list.map(fn(monitored_service) {
-    Stop(service.id(monitored_service))
-  })
+  |> list.map(fn(monitored_service) { Stop(service.id(monitored_service)) })
 }

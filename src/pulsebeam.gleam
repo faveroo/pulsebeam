@@ -6,8 +6,8 @@ import gleam/list
 import pulsebeam/infrastructure/postgres/connection
 import pulsebeam/monitoring/bootstrap
 import pulsebeam/monitoring/runtime
-import pulsebeam/service
 import pulsebeam/repository/persistence_error
+import pulsebeam/service
 
 type MainEvent {
   Stored(Result(Nil, persistence_error.PersistenceError))
@@ -83,11 +83,9 @@ fn consume_outcomes(
     |> process.select_monitors(ComponentExited)
 
   case process.selector_receive_forever(selector) {
-    Stored(Ok(Nil)) ->
-      io.println("Verificação persistida com sucesso.")
+    Stored(Ok(Nil)) -> io.println("Verificação persistida com sucesso.")
 
-    Stored(Error(_)) ->
-      io.println("Falha ao persistir uma verificação.")
+    Stored(Error(_)) -> io.println("Falha ao persistir uma verificação.")
 
     ComponentExited(process.ProcessDown(monitor, _, _)) -> {
       case list.find(watched, fn(item) { item.monitor == monitor }) {
@@ -98,8 +96,7 @@ fn consume_outcomes(
             <> " terminou. O monitoramento pode estar interrompido; "
             <> "reinício automático ainda não implementado.",
           )
-        Error(_) ->
-          io.println("ALERTA: processo de monitoramento terminou.")
+        Error(_) -> io.println("ALERTA: processo de monitoramento terminou.")
       }
     }
 

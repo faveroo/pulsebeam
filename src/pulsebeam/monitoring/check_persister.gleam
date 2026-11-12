@@ -111,6 +111,9 @@ pub fn stop_and_wait(commands: process.Subject(Command)) -> Result(Nil, Nil) {
 }
 
 // Used by the consumer as a message barrier after it has emitted its checks.
-pub fn drain(commands: process.Subject(Command), reply: process.Subject(Nil)) -> Nil {
+pub fn drain(
+  commands: process.Subject(Command),
+  reply: process.Subject(Nil),
+) -> Nil {
   process.send(commands, Drain(reply))
 }
