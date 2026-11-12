@@ -1,6 +1,6 @@
 # Persistence Architecture
 
-> Status: Stage 4 persistence architecture (ADR-0003). The PostgreSQL `ServiceRepository` and `ServiceCheckRepository` adapters are implemented through Issues #16 and #17; scheduler integration and supervised runtime wiring remain future work.
+> Status: Stage 4 persistence architecture (ADR-0003). The PostgreSQL `ServiceRepository` and `ServiceCheckRepository` adapters are implemented through Issues #16 and #17. Issue #19 integrates scheduler/runtime startup and persistence on each check; OTP supervision and automatic process recovery are future work.
 
 ## Purpose
 
@@ -166,7 +166,7 @@ The current ServiceCheck adapter maps unavailable connections to `ConnectionFail
 
 Persistence failures must be represented as values and handled by the application/runtime layer.
 
-A failed write for one Service or ServiceCheck must not terminate unrelated monitors. Stage 4 scheduling and supervision will build on this rule.
+A failed write for one Service or ServiceCheck must not terminate unrelated monitors. The Stage 4 runtime already isolates each Service and sends a completion signal after successful or failed persistence, allowing the scheduler to continue. Unexpected BEAM process crashes still require automatic recovery in a later issue.
 
 ```text
 Monitor A -> persistence failure -> controlled error/reporting
@@ -252,7 +252,7 @@ Follow-up work (appropriate for the Stage 4 integration/runtime infrastructure w
 
 The ServiceCheck adapter maps unclassified SQL failures, including foreign-key violations, to `QueryFailed`. Consider more specific error mappings if application workflows need to distinguish missing parent Services or particular constraints; do not leak `pog` errors into the domain.
 
-The repository contracts are declared independently of PostgreSQL but the application-level composition/wiring of those function records is not yet implemented. This belongs with the runtime integration work.
+The runtime bootstrap composes the concrete PostgreSQL Service and ServiceCheck adapters, but not all repository contract function records are wired through a separate application service. The running application reports persistence success/failure without a ServiceId in each outcome; structured per-Service diagnostics remain future work.
 
 ## Retention and cleanup
 
