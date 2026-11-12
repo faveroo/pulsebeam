@@ -117,11 +117,24 @@ pub fn stop(running: Runtime) -> Nil {
 }
 
 pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
-  case scheduler.stop_and_wait(running.scheduler_commands) {
+  // The scheduler sends its barrier from its own process, after all checks.
+  let consumer_barrier = fn(reply) {
+    check_consumer.drain(running.consumer_commands, reply)
+  }
+
+  case scheduler.stop_and_drain(running.scheduler_commands, consumer_barrier) {
     Error(_) -> Error(SchedulerStopTimedOut)
 
-    Ok(Nil) ->
-      case check_consumer.stop_and_wait(running.consumer_commands) {
+    Ok(Nil) -> {
+      // The consumer sends the persister barrier only after all HTTP results.
+      let persister_barrier = fn(reply) {
+        check_persister.drain(running.persister_commands, reply)
+      }
+
+      case check_consumer.stop_and_drain(
+        running.consumer_commands,
+        persister_barrier,
+      ) {
         Error(_) -> Error(ConsumerStopTimedOut)
 
         Ok(Nil) ->
@@ -135,5 +148,6 @@ pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
               }
           }
       }
+    }
   }
 }
