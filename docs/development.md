@@ -1,7 +1,7 @@
 
 # Local Development
 
-This guide explains how to configure a local development environment for PulseBeam, including PostgreSQL and integration tests.
+This guide explains how to configure a local development environment for PulseBeam, including PostgreSQL, continuous monitoring, and integration tests.
 
 For persistence architecture decisions, see [Persistence Architecture](./persistence.md).
 
@@ -14,7 +14,7 @@ using Linux containers, then run these commands from the repository root:
 docker compose up -d --build --wait
 docker compose exec dev gleam --version
 docker compose exec dev gleam format --check
-docker compose exec dev gleam test
+docker compose exec -e PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable" dev gleam test
 ```
 
 The development image uses Gleam 1.19.2, Erlang/OTP 28, Rebar3, Git, and native
@@ -32,8 +32,7 @@ docker compose stop
 docker compose start
 ```
 
-`gleam run` currently prints the placeholder greeting from `src/pulsebeam.gleam`;
-there is no web server to expose yet.
+`gleam run` now starts **real, continuous monitoring** of enabled services in the configured database. It is not a web server. Run it in an interactive terminal, and press Ctrl+C to stop the development session. Component process exits are logged; automatic restart of a crashed monitor is not yet implemented.
 
 The repository is mounted at `/workspace`. Edit files with your normal host editor;
 the container sees those changes immediately. A named volume keeps Linux build
@@ -53,8 +52,10 @@ order, to both databases:
 | `pulsebeam` | Development data | `postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam?sslmode=disable` |
 | `pulsebeam_test` | Integration tests | `postgresql://pulsebeam:pulsebeam@postgres:5432/pulsebeam_test?sslmode=disable` |
 
-`PULSEBEAM_DATABASE_URL` defaults to the test database inside `dev`, because the
-current test helper reads that variable. The example credentials are for local
+`PULSEBEAM_DATABASE_URL` defaults to the **development** database inside `dev`,
+so `docker compose exec dev gleam run` does not write monitoring history to the test database.
+Always override the URL when running `gleam test`, as shown above; the test helper
+requires a dedicated test database. The example credentials are for local
 development only. From the host, use `127.0.0.1` instead of `postgres`. PostgreSQL is
 published only on localhost. If port 5432 is busy, set `PULSEBEAM_POSTGRES_PORT=5433`
 in a local `.env` file before starting Compose; the internal URLs stay the same.
@@ -185,11 +186,28 @@ Run the complete test suite:
 gleam test
 ```
 
-The suite currently includes both domain tests and PostgreSQL integration tests. Therefore, the test database must be available when running the complete suite.
+The suite currently includes both domain tests and PostgreSQL integration tests. Therefore, the test database must be available when running the complete suite. Do not run integration tests against the development database.
 
 Integration tests for services and service checks use transactions and explicit rollbacks to avoid leaving test records behind. The helper in `test/support/postgres.gleam` creates a new named pool per test, limits each pool to one connection, and waits until the connection is ready; **it does not explicitly shut down those pools**. The test runner currently requires a running PostgreSQL instance.
 
 See [Persistence Architecture](./persistence.md#technical-debt-and-follow-up) for the outstanding pool lifecycle and CI isolation work.
+
+## Continuous monitoring
+
+Launch monitoring from the host in Codespaces using the development database:
+
+```sh
+PULSEBEAM_DATABASE_URL="postgresql://pulsebeam:pulsebeam@127.0.0.1:5432/pulsebeam?sslmode=disable" gleam run
+```
+
+Or, with Docker Compose, use `docker compose exec dev gleam run`. The application
+loads all enabled persisted services, performs the first check immediately,
+then runs each service according to its `interval_seconds`. A slow check is
+skipped until its previous result has been handled by the persister. The
+`main` process consumes success/error events and reports unexpected BEAM process
+exits. This is **detection, not supervision**: failed components are not restarted.
+Stop a manual development run with Ctrl+C (application-wide graceful termination
+remains future work).
 
 ## Code Formatting
 
@@ -229,7 +247,10 @@ The PostgreSQL adapter implements these operations using `pog`, without exposing
 ## Current Limitations
 
 - After initial Compose setup, new database migrations are applied manually.
-- The complete test suite currently requires PostgreSQL.
+- The complete test suite currently requires PostgreSQL. When using Compose, override `PULSEBEAM_DATABASE_URL` with the `pulsebeam_test` URL shown in the first section.
 - Test database setup is automated for fresh Compose volumes; host setup is manual.
-- Persistent ServiceCheck history is implemented; automated monitoring scheduling and restart recovery remain future work.
+- Automatic ServiceCheck scheduling and persisted-history startup are implemented. A new application run reloads enabled Services, but live enable/disable synchronization and full restart recovery are not.
+- BEAM process exits are reported by the main event loop; automatic restarts, retry budgets, and structured failure recovery are not implemented.
+- Runtime `stop_and_wait` drains in-flight checks using scheduler → consumer → persister barriers. Ctrl+C still does not perform a controlled application-wide shutdown.
+- The main outcome channel reports success/failure without identifying the originating Service; use PostgreSQL history for per-Service diagnostics.
 - Pool lifecycle management, standalone domain-test execution, and automated CI integration-test setup remain technical debt.
