@@ -1,4 +1,5 @@
 import gleam/erlang/process
+import gleam/result
 import pog
 import pulsebeam/infrastructure/clock/system
 import pulsebeam/infrastructure/http/transport
@@ -14,6 +15,7 @@ import pulsebeam/service_check
 
 pub opaque type Runtime {
   Runtime(
+    monitored_service_id: service.ServiceId,
     scheduler_commands: process.Subject(scheduler.Command),
     consumer_commands: process.Subject(check_consumer.Command),
     persister_commands: process.Subject(check_persister.Command),
@@ -43,7 +45,7 @@ pub fn start(
   }
 }
 
-pub fn start_enabled(
+fn start_enabled(
   monitored_service: service.Service,
   transport: ports.HttpTransport,
   clock: ports.Clock,
@@ -88,6 +90,7 @@ pub fn start_enabled(
                   completion_relay.bind(relay, scheduler_commands)
 
                   Ok(Runtime(
+                    monitored_service_id: service.id(monitored_service),
                     scheduler_commands:,
                     consumer_commands:,
                     persister_commands:,
@@ -150,4 +153,18 @@ pub fn stop_and_wait(running: Runtime) -> Result(Nil, ShutdownError) {
       }
     }
   }
+}
+
+// Process IDs are used by the application to monitor abnormal or unexpected
+// termination. Monitoring alone does not restart a failed component.
+pub fn process_ids(running: Runtime) -> Result(List(process.Pid), Nil) {
+  use scheduler_pid <- result.try(process.subject_owner(running.scheduler_commands))
+  use consumer_pid <- result.try(process.subject_owner(running.consumer_commands))
+  use persister_pid <- result.try(process.subject_owner(running.persister_commands))
+  use relay_pid <- result.try(completion_relay.owner_pid(running.relay))
+  Ok([scheduler_pid, consumer_pid, persister_pid, relay_pid])
+}
+
+pub fn service_id(running: Runtime) -> service.ServiceId {
+  running.monitored_service_id
 }
